@@ -135,11 +135,14 @@ void QualisysDriver::process_packet(CRTPacket * const packet)
     timestamp = rclcpp::Clock().now();
   } else {
     // GetTimeStamp() returns timestamp in microseconds
-    unsigned long long qualisys_timestamp_us = packet->GetTimeStamp();
+    const uint64_t MICROSECONDS_PER_SECOND = 1000000;
+    const uint32_t NANOSECONDS_PER_MICROSECOND = 1000;
+    
+    uint64_t qualisys_timestamp_us = packet->GetTimeStamp();
     // Convert microseconds to seconds and nanoseconds for ROS time
     timestamp = rclcpp::Time(
-      static_cast<int64_t>(qualisys_timestamp_us / 1000000),  // seconds
-      static_cast<uint32_t>((qualisys_timestamp_us % 1000000) * 1000)  // nanoseconds
+      static_cast<int64_t>(qualisys_timestamp_us / MICROSECONDS_PER_SECOND),  // seconds
+      static_cast<uint32_t>((qualisys_timestamp_us % MICROSECONDS_PER_SECOND) * NANOSECONDS_PER_MICROSECOND)  // nanoseconds
     );
   }
 
