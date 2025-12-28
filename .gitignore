@@ -1,0 +1,21 @@
+# CodeQL temporary files
+_codeql_detected_source_root
+
+# Build artifacts
+build/
+install/
+log/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
