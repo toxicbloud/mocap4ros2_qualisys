@@ -129,10 +129,24 @@ void QualisysDriver::process_packet(CRTPacket * const packet)
     return;
   }
 
+  // Get timestamp - use Qualisys timestamp if use_system_timestamp is false
+  rclcpp::Time timestamp;
+  if (use_system_timestamp_) {
+    timestamp = rclcpp::Clock().now();
+  } else {
+    // GetTimeStamp() returns timestamp in microseconds
+    unsigned long long qualisys_timestamp_us = packet->GetTimeStamp();
+    // Convert microseconds to seconds and nanoseconds for ROS time
+    timestamp = rclcpp::Time(
+      static_cast<int64_t>(qualisys_timestamp_us / 1000000),  // seconds
+      static_cast<uint32_t>((qualisys_timestamp_us % 1000000) * 1000)  // nanoseconds
+    );
+  }
+
   if (mocap_markers_pub_->get_subscription_count() > 0) {
     mocap4r2_msgs::msg::Markers markers_msg;
     markers_msg.header.frame_id = frame_id_;
-    markers_msg.header.stamp = rclcpp::Clock().now();
+    markers_msg.header.stamp = timestamp;
     markers_msg.frame_number = frame_number;
 
     for (unsigned int i = 0; i < marker_count; ++i) {
@@ -154,7 +168,7 @@ void QualisysDriver::process_packet(CRTPacket * const packet)
   if (mocap_rigid_bodies_pub_->get_subscription_count() > 0) {
     mocap4r2_msgs::msg::RigidBodies msg_rb;
     msg_rb.header.frame_id = frame_id_;
-    msg_rb.header.stamp = rclcpp::Clock().now();
+    msg_rb.header.stamp = timestamp;
     msg_rb.frame_number = frame_number;
 
     for (unsigned int i = 0; i < rb_count; i++) {
@@ -346,6 +360,7 @@ void QualisysDriver::initParameters()
   declare_parameter<bool>("use_markers_with_id", true);
   declare_parameter<int>("publish_rate", 10);
   declare_parameter<std::string>("frame_id", "map");
+  declare_parameter<bool>("use_system_timestamp", true);
 
   get_parameter<std::string>("host_name", host_name_);
   get_parameter<int>("port", port_);
@@ -358,6 +373,7 @@ void QualisysDriver::initParameters()
   get_parameter<bool>("use_markers_with_id", use_markers_with_id_);
   get_parameter<int>("publish_rate", publish_rate_);
   get_parameter<std::string>("frame_id", frame_id_);
+  get_parameter<bool>("use_system_timestamp", use_system_timestamp_);
 
   RCLCPP_INFO(get_logger(), "Param host_name: %s", host_name_.c_str());
   RCLCPP_INFO(get_logger(), "Param port: %d", port_);
@@ -370,4 +386,5 @@ void QualisysDriver::initParameters()
   RCLCPP_INFO(get_logger(), "Param use_markers_with_id: %s", use_markers_with_id_ ? "true" : "false");
   RCLCPP_INFO(get_logger(), "Param publish_rate: %d", publish_rate_);
   RCLCPP_INFO(get_logger(), "Param frame_id: %s", frame_id_.c_str());
+  RCLCPP_INFO(get_logger(), "Param use_system_timestamp: %s", use_system_timestamp_ ? "true" : "false");
 }

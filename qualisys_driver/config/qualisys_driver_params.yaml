@@ -11,3 +11,4 @@ qualisys_driver_node:
     qos_depth: 10                         # 10 / 100 / 1000
     publish_rate: 10
     frame_id: "qualisys"
+    use_system_timestamp: true            # true: use ROS now() timestamp, false: use Qualisys camera timestamp
