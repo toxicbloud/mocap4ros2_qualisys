@@ -379,7 +379,6 @@ void QualisysDriver::calibrate_timestamp_offset()
 
   for (int i = 0; i < calibration_samples_; ++i) {
     // Record system time when we trigger the event
-    auto trigger_system_time = std::chrono::steady_clock::now();
     auto trigger_ros_time = rclcpp::Clock().now();
     
     // Send event to QTM
@@ -399,6 +398,13 @@ void QualisysDriver::calibrate_timestamp_offset()
     
     while (!event_received && attempts < max_attempts) {
       CRTPacket * prt_packet = port_protocol_.GetRTPacket();
+      if (prt_packet == nullptr) {
+        RCLCPP_WARN(get_logger(), "GetRTPacket returned null");
+        attempts++;
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        continue;
+      }
+      
       CRTPacket::EPacketType e_type;
       
       if (port_protocol_.ReceiveRTPacket(e_type, false)) { // Don't skip events
@@ -412,7 +418,7 @@ void QualisysDriver::calibrate_timestamp_offset()
               // Convert camera timestamp to nanoseconds
               int64_t camera_time_ns = static_cast<int64_t>(camera_timestamp_us * NANOSECONDS_PER_MICROSECOND);
               
-              // Get current ROS time in nanoseconds
+              // Get ROS time when we sent the trigger
               int64_t ros_time_ns = trigger_ros_time.nanoseconds();
               
               // Calculate offset: system_time - camera_time
@@ -423,16 +429,6 @@ void QualisysDriver::calibrate_timestamp_offset()
               event_received = true;
             }
           }
-        } else if (e_type == CRTPacket::PacketData) {
-          // Regular data packet, check timestamp to see if we're close
-          uint64_t camera_timestamp_us = prt_packet->GetTimeStamp();
-          int64_t camera_time_ns = static_cast<int64_t>(camera_timestamp_us * NANOSECONDS_PER_MICROSECOND);
-          int64_t current_ros_time_ns = rclcpp::Clock().now().nanoseconds();
-          int64_t offset = current_ros_time_ns - camera_time_ns;
-          offset_samples.push_back(offset);
-          
-          RCLCPP_DEBUG(get_logger(), "Calibration sample %d (from data): offset = %ld ns", i, offset);
-          event_received = true;
         }
       }
       
@@ -469,7 +465,9 @@ void QualisysDriver::calibrate_timestamp_offset()
     int64_t diff = offset - timestamp_offset_ns_;
     variance_sum += diff * diff;
   }
-  double std_dev_ns = std::sqrt(static_cast<double>(variance_sum) / offset_samples.size());
+  // Use sample standard deviation (divide by n-1) for better accuracy with small samples
+  size_t divisor = offset_samples.size() > 1 ? offset_samples.size() - 1 : 1;
+  double std_dev_ns = std::sqrt(static_cast<double>(variance_sum) / divisor);
   
   RCLCPP_INFO(get_logger(), "Timestamp offset calibration complete:");
   RCLCPP_INFO(get_logger(), "  Samples collected: %zu", offset_samples.size());
