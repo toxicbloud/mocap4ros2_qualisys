@@ -78,6 +78,7 @@ public:
   void loop();
   bool stop_qualisys();
   void initParameters();
+  void calibrate_timestamp_offset();
 
 private:
   std::shared_ptr<rclcpp::TimerBase> timer_;
@@ -100,6 +101,10 @@ private:
   int publish_rate_;
   std::string frame_id_;
   bool use_system_timestamp_;
+  bool calibrate_timestamp_offset_;
+  int calibration_samples_;
+  int64_t timestamp_offset_ns_;
+  bool timestamp_offset_calibrated_;
   std::shared_ptr<rclcpp::Client<lifecycle_msgs::srv::ChangeState>> client_change_state_;
   rclcpp_lifecycle::LifecyclePublisher<mocap4r2_msgs::msg::Markers>::SharedPtr mocap_markers_pub_;
   rclcpp_lifecycle::LifecyclePublisher<mocap4r2_msgs::msg::RigidBodies>::SharedPtr
