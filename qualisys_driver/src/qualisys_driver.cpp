@@ -403,6 +403,8 @@ void QualisysDriver::calibrate_timestamp_offset()
   } else {
     RCLCPP_INFO(get_logger(), "Successfully took control of QTM for event-based calibration");
     
+    bool streaming_started = false;
+    
     // Start streaming to receive events
     if (!port_protocol_.StreamFrames(CRTProtocol::RateAllFrames, 0, 0, nullptr, 
                                       CRTProtocol::cComponent3d + CRTProtocol::cComponent6d)) {
@@ -410,6 +412,7 @@ void QualisysDriver::calibrate_timestamp_offset()
       port_protocol_.ReleaseControl();
       return;
     }
+    streaming_started = true;
     
     // Event-based calibration: send events and measure round-trip time
     for (int i = 0; i < calibration_samples_; ++i) {
@@ -425,7 +428,7 @@ void QualisysDriver::calibrate_timestamp_offset()
       
       RCLCPP_DEBUG(get_logger(), "Sent calibration event %d", i);
       
-      // Wait for the event to be echoed back in the data stream
+      // Wait for the next trigger event (should be ours since we have QTM control)
       bool event_received = false;
       int attempts = 0;
       const int max_attempts = 50; // Timeout after ~5 seconds
@@ -443,6 +446,7 @@ void QualisysDriver::calibrate_timestamp_offset()
           if (e_type == CRTPacket::PacketEvent) {
             CRTPacket::EEvent event;
             if (prt_packet->GetEvent(event)) {
+              // Accept any trigger event - we have QTM control so these should be ours
               if (event == CRTPacket::EventTrigger) {
                 // Get the camera timestamp when the event was recorded
                 uint64_t camera_timestamp_us = prt_packet->GetTimeStamp();
@@ -472,8 +476,10 @@ void QualisysDriver::calibrate_timestamp_offset()
       std::this_thread::sleep_for(std::chrono::milliseconds(200));
     }
     
-    // Stop streaming and release control
-    port_protocol_.StreamFramesStop();
+    // Ensure proper cleanup
+    if (streaming_started) {
+      port_protocol_.StreamFramesStop();
+    }
     port_protocol_.ReleaseControl();
     RCLCPP_INFO(get_logger(), "Released QTM control after calibration");
   }
