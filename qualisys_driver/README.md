@@ -17,3 +17,4 @@ You can configure the following parameters in `config/qualisys_driver_params.yam
 * `qos_history_policy` (keep_all): Quality of Service history policy.
 * `qos_reliability_policy` (best_effort): Quality of Service reliability policy.
 * `qos_depth` (10): Quality of Service depth.
+* `use_system_timestamp` (true): When set to `true`, uses ROS system time (`now()`) for message timestamps. When set to `false`, uses the actual timestamp from the Qualisys camera data. Using Qualisys timestamps ensures synchronization with the actual capture time rather than the message publication time.
