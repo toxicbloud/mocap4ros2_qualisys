@@ -30,8 +30,8 @@ When Qualisys cameras are not synchronized with UTC time via PTP (Precision Time
 3. Optionally adjust `calibration_samples` (default: 10) for calibration accuracy
 
 The calibration process:
-- Triggers software events to QTM at known system times
-- Receives the events back with camera timestamps
+- Requests individual frames from QTM during node activation
+- Records both camera timestamp and system time for each frame
 - Calculates the average offset between system time and camera time
 - Applies this offset to all subsequent timestamps
 
