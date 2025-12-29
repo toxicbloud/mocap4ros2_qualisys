@@ -30,9 +30,13 @@ When Qualisys cameras are not synchronized with UTC time via PTP (Precision Time
 3. Optionally adjust `calibration_samples` (default: 10) for calibration accuracy
 
 The calibration process:
-- Requests individual frames from QTM during node activation
-- Records both camera timestamp and system time for each frame
-- Calculates the average offset between system time and camera time
-- Applies this offset to all subsequent timestamps
+- Takes control of QTM to enable sending software events
+- Sends timestamped software events to QTM at known system times
+- Receives the events back with camera timestamps
+- Calculates the offset between system time (when event was sent) and camera time (when event was recorded)
+- Averages multiple samples for better accuracy
+- Releases QTM control after calibration
+
+If taking control fails (e.g., another application has control), it falls back to a simpler approach that compares frame reception time with camera timestamps.
 
 This ensures that published ROS messages have accurate timestamps that reflect the true capture time while maintaining synchronization across the system.

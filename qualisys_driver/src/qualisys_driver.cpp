@@ -369,51 +369,113 @@ void QualisysDriver::calibrate_timestamp_offset()
   std::vector<int64_t> offset_samples;
   const uint32_t NANOSECONDS_PER_MICROSECOND = 1000;
   
-  // Collect samples by requesting individual frames and comparing timestamps with system time
-  for (int i = 0; i < calibration_samples_; ++i) {
-    // Request a single frame
-    if (!port_protocol_.GetCurrentFrame(CRTProtocol::cComponent3d + CRTProtocol::cComponent6d)) {
-      RCLCPP_WARN(get_logger(), "Failed to get current frame during calibration sample %d", i);
-      continue;
-    }
+  // Take control of QTM to enable sending events
+  if (!port_protocol_.TakeControl()) {
+    RCLCPP_WARN(get_logger(), "Failed to take control of QTM, trying calibration without events");
     
-    CRTPacket * prt_packet = port_protocol_.GetRTPacket();
-    if (prt_packet == nullptr) {
-      RCLCPP_WARN(get_logger(), "GetRTPacket returned null during calibration");
-      continue;
-    }
-    
-    CRTPacket::EPacketType e_type;
-    
-    // Receive the frame
-    if (port_protocol_.ReceiveRTPacket(e_type, true)) { // Skip events
-      if (e_type == CRTPacket::PacketData) {
-        // Record system time when we receive the packet
-        auto current_ros_time = rclcpp::Clock().now();
-        
-        // Get the camera timestamp from the packet
-        uint64_t camera_timestamp_us = prt_packet->GetTimeStamp();
-        
-        // Convert camera timestamp to nanoseconds
-        int64_t camera_time_ns = static_cast<int64_t>(camera_timestamp_us * NANOSECONDS_PER_MICROSECOND);
-        
-        // Get current ROS time in nanoseconds
-        int64_t ros_time_ns = current_ros_time.nanoseconds();
-        
-        // Calculate offset: system_time - camera_time
-        int64_t offset = ros_time_ns - camera_time_ns;
-        offset_samples.push_back(offset);
-        
-        RCLCPP_DEBUG(get_logger(), "Calibration sample %d: offset = %ld ns", i, offset);
-      } else {
-        RCLCPP_WARN(get_logger(), "Received non-data packet during calibration sample %d", i);
+    // Fallback: Collect samples by requesting individual frames
+    for (int i = 0; i < calibration_samples_; ++i) {
+      if (!port_protocol_.GetCurrentFrame(CRTProtocol::cComponent3d + CRTProtocol::cComponent6d)) {
+        RCLCPP_WARN(get_logger(), "Failed to get current frame during calibration sample %d", i);
+        continue;
       }
-    } else {
-      RCLCPP_WARN(get_logger(), "Failed to receive packet during calibration sample %d", i);
+      
+      CRTPacket * prt_packet = port_protocol_.GetRTPacket();
+      if (prt_packet == nullptr) {
+        RCLCPP_WARN(get_logger(), "GetRTPacket returned null during calibration");
+        continue;
+      }
+      
+      CRTPacket::EPacketType e_type;
+      if (port_protocol_.ReceiveRTPacket(e_type, true)) {
+        if (e_type == CRTPacket::PacketData) {
+          auto current_ros_time = rclcpp::Clock().now();
+          uint64_t camera_timestamp_us = prt_packet->GetTimeStamp();
+          int64_t camera_time_ns = static_cast<int64_t>(camera_timestamp_us * NANOSECONDS_PER_MICROSECOND);
+          int64_t ros_time_ns = current_ros_time.nanoseconds();
+          int64_t offset = ros_time_ns - camera_time_ns;
+          offset_samples.push_back(offset);
+          RCLCPP_DEBUG(get_logger(), "Calibration sample %d (fallback): offset = %ld ns", i, offset);
+        }
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+  } else {
+    RCLCPP_INFO(get_logger(), "Successfully took control of QTM for event-based calibration");
+    
+    // Start streaming to receive events
+    if (!port_protocol_.StreamFrames(CRTProtocol::RateAllFrames, 0, 0, nullptr, 
+                                      CRTProtocol::cComponent3d + CRTProtocol::cComponent6d)) {
+      RCLCPP_ERROR(get_logger(), "Failed to start streaming for calibration");
+      port_protocol_.ReleaseControl();
+      return;
     }
     
-    // Small delay between samples to avoid overwhelming the system
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    // Event-based calibration: send events and measure round-trip time
+    for (int i = 0; i < calibration_samples_; ++i) {
+      // Record system time when we send the event
+      auto trigger_ros_time = rclcpp::Clock().now();
+      
+      // Send event to QTM
+      std::string event_label = "ROS_CALIB_" + std::to_string(i);
+      if (!port_protocol_.SetQTMEvent(event_label.c_str())) {
+        RCLCPP_WARN(get_logger(), "Failed to send calibration event %d", i);
+        continue;
+      }
+      
+      RCLCPP_DEBUG(get_logger(), "Sent calibration event %d", i);
+      
+      // Wait for the event to be echoed back in the data stream
+      bool event_received = false;
+      int attempts = 0;
+      const int max_attempts = 50; // Timeout after ~5 seconds
+      
+      while (!event_received && attempts < max_attempts) {
+        CRTPacket * prt_packet = port_protocol_.GetRTPacket();
+        if (prt_packet == nullptr) {
+          attempts++;
+          std::this_thread::sleep_for(std::chrono::milliseconds(100));
+          continue;
+        }
+        
+        CRTPacket::EPacketType e_type;
+        if (port_protocol_.ReceiveRTPacket(e_type, false)) { // Don't skip events
+          if (e_type == CRTPacket::PacketEvent) {
+            CRTPacket::EEvent event;
+            if (prt_packet->GetEvent(event)) {
+              if (event == CRTPacket::EventTrigger) {
+                // Get the camera timestamp when the event was recorded
+                uint64_t camera_timestamp_us = prt_packet->GetTimeStamp();
+                int64_t camera_time_ns = static_cast<int64_t>(camera_timestamp_us * NANOSECONDS_PER_MICROSECOND);
+                
+                // Calculate offset: system_time_when_sent - camera_time_when_recorded
+                int64_t ros_time_ns = trigger_ros_time.nanoseconds();
+                int64_t offset = ros_time_ns - camera_time_ns;
+                offset_samples.push_back(offset);
+                
+                RCLCPP_DEBUG(get_logger(), "Calibration sample %d: offset = %ld ns", i, offset);
+                event_received = true;
+              }
+            }
+          }
+        }
+        
+        attempts++;
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+      }
+      
+      if (!event_received) {
+        RCLCPP_WARN(get_logger(), "Calibration event %d not received after timeout", i);
+      }
+      
+      // Small delay between samples
+      std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    }
+    
+    // Stop streaming and release control
+    port_protocol_.StreamFramesStop();
+    port_protocol_.ReleaseControl();
+    RCLCPP_INFO(get_logger(), "Released QTM control after calibration");
   }
   
   // Calculate average offset
