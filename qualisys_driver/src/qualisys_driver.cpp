@@ -476,6 +476,9 @@ void QualisysDriver::calibrate_timestamp_offset()
   RCLCPP_INFO(get_logger(), "  Average offset: %ld ns (%.6f s)", 
               timestamp_offset_ns_, timestamp_offset_ns_ / 1e9);
   RCLCPP_INFO(get_logger(), "  Standard deviation: %.6f ms", std_dev_ns / 1e6);
+  
+  // Stop streaming after calibration - main loop will restart it
+  port_protocol_.StreamFramesStop();
 }
 
 
