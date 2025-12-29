@@ -403,18 +403,9 @@ void QualisysDriver::calibrate_timestamp_offset()
   } else {
     RCLCPP_INFO(get_logger(), "Successfully took control of QTM for event-based calibration");
     
-    bool streaming_started = false;
-    
-    // Start streaming to receive events
-    if (!port_protocol_.StreamFrames(CRTProtocol::RateAllFrames, 0, 0, nullptr, 
-                                      CRTProtocol::cComponent3d + CRTProtocol::cComponent6d)) {
-      RCLCPP_ERROR(get_logger(), "Failed to start streaming for calibration");
-      port_protocol_.ReleaseControl();
-      return;
-    }
-    streaming_started = true;
-    
-    // Event-based calibration: send events and measure round-trip time
+    // Event-based calibration: send events and wait for event notifications
+    // Note: We don't use StreamFrames here because event notifications come through
+    // the regular TCP connection, not the streaming channel
     for (int i = 0; i < calibration_samples_; ++i) {
       // Record system time when we send the event
       auto trigger_ros_time = rclcpp::Clock().now();
@@ -428,10 +419,10 @@ void QualisysDriver::calibrate_timestamp_offset()
       
       RCLCPP_DEBUG(get_logger(), "Sent calibration event %d", i);
       
-      // Wait for the next trigger event (should be ours since we have QTM control)
+      // Wait for the event notification (not streaming data, just event packet)
       bool event_received = false;
       int attempts = 0;
-      const int max_attempts = 50; // Timeout after ~5 seconds
+      const int max_attempts = 30; // Timeout after ~3 seconds
       
       while (!event_received && attempts < max_attempts) {
         CRTPacket * prt_packet = port_protocol_.GetRTPacket();
@@ -442,7 +433,10 @@ void QualisysDriver::calibrate_timestamp_offset()
         }
         
         CRTPacket::EPacketType e_type;
-        if (port_protocol_.ReceiveRTPacket(e_type, false)) { // Don't skip events
+        // Use Receive directly (not ReceiveRTPacket) to get event packets
+        auto response = port_protocol_.Receive(e_type, false, 100); // 100ms timeout, don't skip events
+        
+        if (response == CNetwork::ResponseType::success) {
           if (e_type == CRTPacket::PacketEvent) {
             CRTPacket::EEvent event;
             if (prt_packet->GetEvent(event)) {
@@ -462,10 +456,14 @@ void QualisysDriver::calibrate_timestamp_offset()
               }
             }
           }
+        } else if (response == CNetwork::ResponseType::timeout) {
+          // Just a timeout, keep trying
+          attempts++;
+        } else {
+          // Error or disconnect
+          RCLCPP_WARN(get_logger(), "Error receiving packet during calibration");
+          attempts++;
         }
-        
-        attempts++;
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
       }
       
       if (!event_received) {
@@ -476,10 +474,7 @@ void QualisysDriver::calibrate_timestamp_offset()
       std::this_thread::sleep_for(std::chrono::milliseconds(200));
     }
     
-    // Ensure proper cleanup
-    if (streaming_started) {
-      port_protocol_.StreamFramesStop();
-    }
+    // Release QTM control
     port_protocol_.ReleaseControl();
     RCLCPP_INFO(get_logger(), "Released QTM control after calibration");
   }

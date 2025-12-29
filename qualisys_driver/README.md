@@ -32,10 +32,12 @@ When Qualisys cameras are not synchronized with UTC time via PTP (Precision Time
 The calibration process:
 - Takes control of QTM to enable sending software events
 - Sends timestamped software events to QTM at known system times
-- Receives the events back with camera timestamps
+- Waits for event notifications (separate from streaming data) with camera timestamps
 - Calculates the offset between system time (when event was sent) and camera time (when event was recorded)
 - Averages multiple samples for better accuracy
 - Releases QTM control after calibration
+
+**Note:** Event notifications are sent over the TCP connection separately from streaming data, so the calibration listens for event packets directly rather than using the streaming protocol.
 
 If taking control fails (e.g., another application has control), it falls back to a simpler approach that compares frame reception time with camera timestamps.
 
