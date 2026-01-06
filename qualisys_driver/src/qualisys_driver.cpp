@@ -31,6 +31,8 @@
 
 using namespace std::chrono_literals;
 
+// Conversion factor from millimeters to meters
+constexpr double MM_TO_M = 0.001;
 
 struct Quaternion {
     float w, x, y, z;
@@ -139,9 +141,9 @@ void QualisysDriver::process_packet(CRTPacket * const packet)
       packet->Get3DMarker((float)i, x, y, z);
       mocap4r2_msgs::msg::Marker this_marker;
       this_marker.marker_index = i;
-      this_marker.translation.x = x / 1000;
-      this_marker.translation.y = y / 1000;
-      this_marker.translation.z = z / 1000;
+      this_marker.translation.x = x * MM_TO_M;
+      this_marker.translation.y = y * MM_TO_M;
+      this_marker.translation.z = z * MM_TO_M;
       if (!std::isnan(this_marker.translation.x) && !std::isnan(this_marker.translation.y) && !std::isnan(this_marker.translation.z)){
         markers_msg.markers.push_back(this_marker);
       }
@@ -173,9 +175,9 @@ void QualisysDriver::process_packet(CRTPacket * const packet)
       if (publish_rb_msg) {
         mocap4r2_msgs::msg::RigidBody rb;
         rb.rigid_body_name = label;
-        rb.pose.position.x = x / 1000;
-        rb.pose.position.y = y / 1000;
-        rb.pose.position.z = z / 1000;
+        rb.pose.position.x = x * MM_TO_M;
+        rb.pose.position.y = y * MM_TO_M;
+        rb.pose.position.z = z * MM_TO_M;
         rb.pose.orientation.x = quaternion.x;
         rb.pose.orientation.y = quaternion.y;
         rb.pose.orientation.z = quaternion.z;
@@ -188,9 +190,9 @@ void QualisysDriver::process_packet(CRTPacket * const packet)
       transform.header.stamp = timestamp;
       transform.header.frame_id = frame_id_;
       transform.child_frame_id = label;
-      transform.transform.translation.x = x / 1000.0;
-      transform.transform.translation.y = y / 1000.0;
-      transform.transform.translation.z = z / 1000.0;
+      transform.transform.translation.x = x * MM_TO_M;
+      transform.transform.translation.y = y * MM_TO_M;
+      transform.transform.translation.z = z * MM_TO_M;
       transform.transform.rotation.x = quaternion.x;
       transform.transform.rotation.y = quaternion.y;
       transform.transform.rotation.z = quaternion.z;
