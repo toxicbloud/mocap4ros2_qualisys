@@ -171,6 +171,11 @@ void QualisysDriver::process_packet(CRTPacket * const packet)
       Quaternion quaternion = matrixToQuaternion(rot_matrix);
       const char* label = port_protocol_.Get6DOFBodyName(i);
 
+      // Skip rigid bodies without valid names
+      if (label == nullptr || label[0] == '\0') {
+        continue;
+      }
+
       // Publish rigid body message if there are subscribers
       if (publish_rb_msg) {
         mocap4r2_msgs::msg::RigidBody rb;
