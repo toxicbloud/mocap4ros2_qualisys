@@ -125,14 +125,10 @@ void QualisysDriver::process_packet(CRTPacket * const packet)
   }
   last_frame_number_ = frame_number;
 
-  if (!mocap_markers_pub_->is_activated() && !mocap_rigid_bodies_pub_->is_activated() ) {
-    return;
-  }
-
   // Get timestamp once for all messages
   rclcpp::Time timestamp = rclcpp::Clock().now();
 
-  if (mocap_markers_pub_->get_subscription_count() > 0) {
+  if (mocap_markers_pub_->is_activated() && mocap_markers_pub_->get_subscription_count() > 0) {
     mocap4r2_msgs::msg::Markers markers_msg;
     markers_msg.header.frame_id = frame_id_;
     markers_msg.header.stamp = timestamp;
@@ -154,48 +150,40 @@ void QualisysDriver::process_packet(CRTPacket * const packet)
     mocap_markers_pub_->publish(markers_msg);
   }
 
-  if (mocap_rigid_bodies_pub_->get_subscription_count() > 0) {
+  // Process rigid bodies - extract data once for both message publishing and TF
+  if (rb_count > 0) {
     mocap4r2_msgs::msg::RigidBodies msg_rb;
-    msg_rb.header.frame_id = frame_id_;
-    msg_rb.header.stamp = timestamp;
-    msg_rb.frame_number = frame_number;
-
-    for (unsigned int i = 0; i < rb_count; i++) {
-      mocap4r2_msgs::msg::RigidBody rb;
-
-      float x, y, z;
-      float rot_matrix[9];
-      // Get6DOFBody(unsigned int nBodyIndex, float &fX, float &fY, float &fZ, float afRotMatrix[9]);
-      packet->Get6DOFBody(i, x, y, z, rot_matrix);
-      Quaternion quaternion = matrixToQuaternion(rot_matrix);
-
-      const char* label = port_protocol_.Get6DOFBodyName(i);
-  
-      rb.rigid_body_name = label;
-      rb.pose.position.x = x / 1000;
-      rb.pose.position.y = y / 1000;
-      rb.pose.position.z = z / 1000;
-      rb.pose.orientation.x = quaternion.x;
-      rb.pose.orientation.y = quaternion.y;
-      rb.pose.orientation.z = quaternion.z;
-      rb.pose.orientation.w = quaternion.w;
-
-      msg_rb.rigidbodies.push_back(rb);
+    bool publish_rb_msg = mocap_rigid_bodies_pub_->is_activated() && 
+                          mocap_rigid_bodies_pub_->get_subscription_count() > 0;
+    
+    if (publish_rb_msg) {
+      msg_rb.header.frame_id = frame_id_;
+      msg_rb.header.stamp = timestamp;
+      msg_rb.frame_number = frame_number;
     }
 
-    mocap_rigid_bodies_pub_->publish(msg_rb);
-  }
-
-  // Publish TF transforms for all rigid bodies
-  if (rb_count > 0) {
     for (unsigned int i = 0; i < rb_count; i++) {
       float x, y, z;
       float rot_matrix[9];
       packet->Get6DOFBody(i, x, y, z, rot_matrix);
       Quaternion quaternion = matrixToQuaternion(rot_matrix);
-
       const char* label = port_protocol_.Get6DOFBodyName(i);
 
+      // Publish rigid body message if there are subscribers
+      if (publish_rb_msg) {
+        mocap4r2_msgs::msg::RigidBody rb;
+        rb.rigid_body_name = label;
+        rb.pose.position.x = x / 1000;
+        rb.pose.position.y = y / 1000;
+        rb.pose.position.z = z / 1000;
+        rb.pose.orientation.x = quaternion.x;
+        rb.pose.orientation.y = quaternion.y;
+        rb.pose.orientation.z = quaternion.z;
+        rb.pose.orientation.w = quaternion.w;
+        msg_rb.rigidbodies.push_back(rb);
+      }
+
+      // Publish TF transform for this rigid body
       geometry_msgs::msg::TransformStamped transform;
       transform.header.stamp = timestamp;
       transform.header.frame_id = frame_id_;
@@ -207,8 +195,11 @@ void QualisysDriver::process_packet(CRTPacket * const packet)
       transform.transform.rotation.y = quaternion.y;
       transform.transform.rotation.z = quaternion.z;
       transform.transform.rotation.w = quaternion.w;
-
       tf_broadcaster_->sendTransform(transform);
+    }
+
+    if (publish_rb_msg) {
+      mocap_rigid_bodies_pub_->publish(msg_rb);
     }
   }
 }
