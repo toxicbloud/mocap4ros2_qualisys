@@ -36,6 +36,12 @@ using namespace std::chrono_literals;
 // Conversion factor from millimeters to meters
 constexpr double MM_TO_M = 0.001;
 
+// Timestamp conversion constants
+constexpr uint32_t NANOSECONDS_PER_MICROSECOND = 1000;
+constexpr int CALIBRATION_SAMPLE_DELAY_MS = 10;
+constexpr int CALIBRATION_TIMEOUT_MICROSECONDS = 1000000; // 1 second
+constexpr int MAX_CALIBRATION_FAILURES = 5;
+
 struct Quaternion {
     float w, x, y, z;
 };
@@ -135,8 +141,6 @@ void QualisysDriver::process_packet(CRTPacket * const packet)
     timestamp = rclcpp::Clock().now();
   } else {
     // GetTimeStamp() returns timestamp in microseconds
-    const uint32_t NANOSECONDS_PER_MICROSECOND = 1000;
-    
     uint64_t qualisys_timestamp_us = packet->GetTimeStamp();
     // Convert microseconds to nanoseconds
     int64_t camera_time_ns = static_cast<int64_t>(qualisys_timestamp_us * NANOSECONDS_PER_MICROSECOND);
@@ -390,12 +394,7 @@ void QualisysDriver::calibrate_timestamp_offset()
   RCLCPP_INFO(get_logger(), "Starting timestamp offset calibration with %d samples using NTP-style ping-pong...", calibration_samples_);
   
   std::vector<int64_t> offset_samples;
-  const uint32_t NANOSECONDS_PER_MICROSECOND = 1000;
-  const int TIMEOUT_MICROSECONDS = 1000000; // 1 second timeout per packet
-  const int CALIBRATION_SAMPLE_DELAY_MS = 10; // Delay between samples
-  
   int consecutive_failures = 0;
-  const int MAX_CONSECUTIVE_FAILURES = 5; // Abort if 5 failures in a row
   
   // NTP-inspired ping-pong approach to calculate time offset
   // This method doesn't rely on event notifications from QTM
@@ -408,7 +407,7 @@ void QualisysDriver::calibrate_timestamp_offset()
     if (!port_protocol_.GetCurrentFrame(CRTProtocol::cComponent3d + CRTProtocol::cComponent6d)) {
       RCLCPP_WARN(get_logger(), "Failed to get current frame during calibration sample %d", i);
       consecutive_failures++;
-      if (consecutive_failures >= MAX_CONSECUTIVE_FAILURES) {
+      if (consecutive_failures >= MAX_CALIBRATION_FAILURES) {
         RCLCPP_ERROR(get_logger(), "Too many consecutive failures (%d), aborting calibration", consecutive_failures);
         break;
       }
@@ -419,7 +418,7 @@ void QualisysDriver::calibrate_timestamp_offset()
     if (prt_packet == nullptr) {
       RCLCPP_WARN(get_logger(), "GetRTPacket returned null during calibration");
       consecutive_failures++;
-      if (consecutive_failures >= MAX_CONSECUTIVE_FAILURES) {
+      if (consecutive_failures >= MAX_CALIBRATION_FAILURES) {
         RCLCPP_ERROR(get_logger(), "Too many consecutive failures (%d), aborting calibration", consecutive_failures);
         break;
       }
@@ -428,10 +427,10 @@ void QualisysDriver::calibrate_timestamp_offset()
     
     CRTPacket::EPacketType e_type;
     // Use a 1-second timeout instead of default 5 seconds to avoid long hangs
-    if (!port_protocol_.ReceiveRTPacket(e_type, true, TIMEOUT_MICROSECONDS)) { // Skip events, 1s timeout
+    if (!port_protocol_.ReceiveRTPacket(e_type, true, CALIBRATION_TIMEOUT_MICROSECONDS)) { // Skip events, 1s timeout
       RCLCPP_WARN(get_logger(), "Failed to receive packet during calibration sample %d (timeout)", i);
       consecutive_failures++;
-      if (consecutive_failures >= MAX_CONSECUTIVE_FAILURES) {
+      if (consecutive_failures >= MAX_CALIBRATION_FAILURES) {
         RCLCPP_ERROR(get_logger(), "Too many consecutive failures (%d), aborting calibration", consecutive_failures);
         break;
       }
@@ -468,7 +467,7 @@ void QualisysDriver::calibrate_timestamp_offset()
     } else {
       RCLCPP_WARN(get_logger(), "Received non-data packet during calibration sample %d", i);
       consecutive_failures++;
-      if (consecutive_failures >= MAX_CONSECUTIVE_FAILURES) {
+      if (consecutive_failures >= MAX_CALIBRATION_FAILURES) {
         RCLCPP_ERROR(get_logger(), "Too many consecutive failures (%d), aborting calibration", consecutive_failures);
         break;
       }
