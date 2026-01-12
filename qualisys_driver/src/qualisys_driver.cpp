@@ -16,6 +16,7 @@
 // Author: Floris Erich <floris.erich@aist.go.jp>,
 //         David Vargas Frutos <david.vargas@urjc.es>
 //         José Miguel Guerrero Hernández <josemiguel.guerrero@urjc.es>
+//         Antonin Rousseau <antonin.rousseau@inria.fr>
 //
 // Also includes code fragments from Kumar Robotics ROS 1 Qualisys driver
 
