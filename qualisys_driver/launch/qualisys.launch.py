@@ -13,6 +13,7 @@
 # limitations under the License.
 #
 # Author: David Vargas Frutos <david.vargas@urjc.es>
+#         Antonin Rousseau    <antonin.rousseau@inria.fr>
 
 import os
 
@@ -23,54 +24,68 @@ import launch
 from launch import LaunchDescription
 from launch.actions import EmitEvent
 from launch.actions import SetEnvironmentVariable
+from launch.actions import DeclareLaunchArgument
+from launch.actions import OpaqueFunction
 from launch_ros.actions import LifecycleNode
 from launch_ros.events.lifecycle import ChangeState
+from launch.substitutions import LaunchConfiguration
 
 import lifecycle_msgs.msg
 
 
 def generate_launch_description():
-    params_file_path = os.path.join(get_package_share_directory(
+    default_params_path = os.path.join(get_package_share_directory(
       'qualisys_driver'), 'config', 'qualisys_driver_params.yaml')
 
+    # Declare a launch argument 'config' so the user can override the params file
+    declare_config_arg = DeclareLaunchArgument(
+        'config',
+        default_value=default_params_path,
+        description='Path to the parameters YAML file for the qualisys driver')
+
     stdout_linebuf_envvar = SetEnvironmentVariable(
-        'RCUTILS_CONSOLE_STDOUT_LINE_BUFFERED', '1')
+      'RCUTILS_CONSOLE_STDOUT_LINE_BUFFERED', '1')
 
-    # print('')
-    # print('params_file_path: ', params_file_path)
-    # print('')
+    def launch_setup(context, *args, **kwargs):
+      # Resolve the 'config' launch argument at runtime
+      config_val = LaunchConfiguration('config').perform(context)
 
-    driver_node = LifecycleNode(
+      if os.path.isabs(config_val) or os.path.sep in config_val:
+        params_file_path = config_val
+      else:
+        params_file_path = os.path.join(
+          get_package_share_directory('qualisys_driver'), 'config', config_val)
+
+      driver_node = LifecycleNode(
         name='qualisys_driver_node',
         namespace='',
         package='qualisys_driver',
         executable='qualisys_driver_main',
         output='screen',
         parameters=[params_file_path],
-    )
+      )
 
-    # Make the driver node take the 'configure' transition
-    driver_configure_trans_event = EmitEvent(
+      driver_configure_trans_event = EmitEvent(
         event=ChangeState(
           lifecycle_node_matcher=launch.events.matchers.matches_action(driver_node),
           transition_id=lifecycle_msgs.msg.Transition.TRANSITION_CONFIGURE,
         )
-    )
+      )
 
-    # Make the driver node take the 'activate' transition
-    driver_activate_trans_event = EmitEvent(
-       event=ChangeState(
+      driver_activate_trans_event = EmitEvent(
+         event=ChangeState(
           lifecycle_node_matcher=launch.events.matchers.matches_action(driver_node),
           transition_id=lifecycle_msgs.msg.Transition.TRANSITION_ACTIVATE,
         )
-    )
+      )
+
+      return [driver_node, driver_configure_trans_event, driver_activate_trans_event]
 
     # Create the launch description and populate
     ld = LaunchDescription()
 
     ld.add_action(stdout_linebuf_envvar)
-    ld.add_action(driver_node)
-    ld.add_action(driver_configure_trans_event)
-    ld.add_action(driver_activate_trans_event)
+    ld.add_action(declare_config_arg)
+    ld.add_action(OpaqueFunction(function=launch_setup))
 
     return ld
