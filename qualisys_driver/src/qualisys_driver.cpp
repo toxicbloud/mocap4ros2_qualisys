@@ -135,7 +135,6 @@ void QualisysDriver::process_packet(CRTPacket * const packet)
     timestamp = rclcpp::Clock().now();
   } else {
     // GetTimeStamp() returns timestamp in microseconds
-    const uint64_t MICROSECONDS_PER_SECOND = 1000000;
     const uint32_t NANOSECONDS_PER_MICROSECOND = 1000;
     
     uint64_t qualisys_timestamp_us = packet->GetTimeStamp();
@@ -392,8 +391,8 @@ void QualisysDriver::calibrate_timestamp_offset()
   
   std::vector<int64_t> offset_samples;
   const uint32_t NANOSECONDS_PER_MICROSECOND = 1000;
-  const int64_t NANOSECONDS_PER_SECOND = 1000000000LL;
   const int TIMEOUT_MICROSECONDS = 1000000; // 1 second timeout per packet
+  const int CALIBRATION_SAMPLE_DELAY_MS = 10; // Delay between samples
   
   int consecutive_failures = 0;
   const int MAX_CONSECUTIVE_FAILURES = 5; // Abort if 5 failures in a row
@@ -476,7 +475,7 @@ void QualisysDriver::calibrate_timestamp_offset()
     }
     
     // Small delay between samples to avoid overwhelming the system
-    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    std::this_thread::sleep_for(std::chrono::milliseconds(CALIBRATION_SAMPLE_DELAY_MS));
   }
   
   // Calculate median offset (more robust against outliers than mean)
