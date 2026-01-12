@@ -34,6 +34,8 @@
 
 using namespace std::chrono_literals;
 
+// Conversion factor from millimeters to meters
+constexpr double MILLIMETERS_TO_METERS = 0.001;
 
 struct Quaternion {
     float w, x, y, z;
@@ -128,7 +130,7 @@ void QualisysDriver::process_packet(CRTPacket * const packet)
   }
   last_frame_number_ = frame_number;
 
-  if (!mocap_markers_pub_->is_activated() && !mocap_rigid_bodies_pub_->is_activated() ) {
+  if (!mocap_markers_pub_->is_activated() && !mocap_rigid_bodies_pub_->is_activated() && !publish_tf_) {
     return;
   }
 
@@ -165,9 +167,9 @@ void QualisysDriver::process_packet(CRTPacket * const packet)
       packet->Get3DMarker((float)i, x, y, z);
       mocap4r2_msgs::msg::Marker this_marker;
       this_marker.marker_index = i;
-      this_marker.translation.x = x / 1000;
-      this_marker.translation.y = y / 1000;
-      this_marker.translation.z = z / 1000;
+      this_marker.translation.x = x * MILLIMETERS_TO_METERS;
+      this_marker.translation.y = y * MILLIMETERS_TO_METERS;
+      this_marker.translation.z = z * MILLIMETERS_TO_METERS;
       if (!std::isnan(this_marker.translation.x) && !std::isnan(this_marker.translation.y) && !std::isnan(this_marker.translation.z)){
         markers_msg.markers.push_back(this_marker);
       }
@@ -176,15 +178,23 @@ void QualisysDriver::process_packet(CRTPacket * const packet)
     mocap_markers_pub_->publish(markers_msg);
   }
 
-  if (mocap_rigid_bodies_pub_->get_subscription_count() > 0) {
+  if (mocap_rigid_bodies_pub_->get_subscription_count() > 0 || publish_tf_) {
+    // Reserve capacity for TF transforms to avoid reallocations
+    std::vector<geometry_msgs::msg::TransformStamped> tf_transforms;
+    if (publish_tf_ && rb_count > 0) {
+      tf_transforms.reserve(rb_count);
+    }
+    
+    // Check if we should publish rigid body messages
+    bool publish_rigid_bodies = mocap_rigid_bodies_pub_->get_subscription_count() > 0;
+    
+    // Prepare rigid bodies message if we have subscribers
     mocap4r2_msgs::msg::RigidBodies msg_rb;
     msg_rb.header.frame_id = frame_id_;
     msg_rb.header.stamp = timestamp;
     msg_rb.frame_number = frame_number;
 
     for (unsigned int i = 0; i < rb_count; i++) {
-      mocap4r2_msgs::msg::RigidBody rb;
-
       float x, y, z;
       float rot_matrix[9];
       // Get6DOFBody(unsigned int nBodyIndex, float &fX, float &fY, float &fZ, float afRotMatrix[9]);
@@ -192,20 +202,64 @@ void QualisysDriver::process_packet(CRTPacket * const packet)
       Quaternion quaternion = matrixToQuaternion(rot_matrix);
 
       const char* label = port_protocol_.Get6DOFBodyName(i);
-  
-      rb.rigid_body_name = label;
-      rb.pose.position.x = x / 1000;
-      rb.pose.position.y = y / 1000;
-      rb.pose.position.z = z / 1000;
-      rb.pose.orientation.x = quaternion.x;
-      rb.pose.orientation.y = quaternion.y;
-      rb.pose.orientation.z = quaternion.z;
-      rb.pose.orientation.w = quaternion.w;
+      
+      // Skip this rigid body if name is null
+      if (label == nullptr) {
+        RCLCPP_WARN(get_logger(), "Rigid body %u has null name, skipping", i);
+        continue;
+      }
 
-      msg_rb.rigidbodies.push_back(rb);
+      // Add rigid body to message if we have subscribers
+      if (publish_rigid_bodies) {
+        mocap4r2_msgs::msg::RigidBody rb;
+        rb.rigid_body_name = label;
+        rb.pose.position.x = x * MILLIMETERS_TO_METERS;
+        rb.pose.position.y = y * MILLIMETERS_TO_METERS;
+        rb.pose.position.z = z * MILLIMETERS_TO_METERS;
+        rb.pose.orientation.x = quaternion.x;
+        rb.pose.orientation.y = quaternion.y;
+        rb.pose.orientation.z = quaternion.z;
+        rb.pose.orientation.w = quaternion.w;
+
+        msg_rb.rigidbodies.push_back(rb);
+      }
+
+      // Collect TF transform if enabled and data is valid (no NaN values)
+      if (publish_tf_) {
+        // Check if position and orientation are valid (no NaN values)
+        bool position_valid = !std::isnan(x) && !std::isnan(y) && !std::isnan(z);
+        bool orientation_valid = !std::isnan(quaternion.x) && !std::isnan(quaternion.y) && 
+                                 !std::isnan(quaternion.z) && !std::isnan(quaternion.w);
+        
+        if (position_valid && orientation_valid) {
+          geometry_msgs::msg::TransformStamped transform_stamped;
+          transform_stamped.header.stamp = timestamp;
+          transform_stamped.header.frame_id = frame_id_;  // "qualisys" - world frame
+          transform_stamped.child_frame_id = label;       // rigid body name
+
+          transform_stamped.transform.translation.x = x * MILLIMETERS_TO_METERS;
+          transform_stamped.transform.translation.y = y * MILLIMETERS_TO_METERS;
+          transform_stamped.transform.translation.z = z * MILLIMETERS_TO_METERS;
+
+          transform_stamped.transform.rotation.x = quaternion.x;
+          transform_stamped.transform.rotation.y = quaternion.y;
+          transform_stamped.transform.rotation.z = quaternion.z;
+          transform_stamped.transform.rotation.w = quaternion.w;
+
+          tf_transforms.push_back(transform_stamped);
+        }
+      }
     }
 
-    mocap_rigid_bodies_pub_->publish(msg_rb);
+    // Publish rigid bodies message if we have subscribers
+    if (publish_rigid_bodies) {
+      mocap_rigid_bodies_pub_->publish(msg_rb);
+    }
+
+    // Publish all TF transforms as a batch
+    if (publish_tf_ && !tf_transforms.empty()) {
+      tf_broadcaster_->sendTransform(tf_transforms);
+    }
   }
 }
 
@@ -522,6 +576,7 @@ void QualisysDriver::initParameters()
   declare_parameter<bool>("use_system_timestamp", true);
   declare_parameter<bool>("calibrate_timestamp_offset", false);
   declare_parameter<int>("calibration_samples", 10);
+  declare_parameter<bool>("publish_tf", true);
 
   get_parameter<std::string>("host_name", host_name_);
   get_parameter<int>("port", port_);
@@ -537,6 +592,7 @@ void QualisysDriver::initParameters()
   get_parameter<bool>("use_system_timestamp", use_system_timestamp_);
   get_parameter<bool>("calibrate_timestamp_offset", calibrate_timestamp_offset_);
   get_parameter<int>("calibration_samples", calibration_samples_);
+  get_parameter<bool>("publish_tf", publish_tf_);
 
   // Initialize calibration state
   timestamp_offset_ns_ = 0;
@@ -556,4 +612,5 @@ void QualisysDriver::initParameters()
   RCLCPP_INFO(get_logger(), "Param use_system_timestamp: %s", use_system_timestamp_ ? "true" : "false");
   RCLCPP_INFO(get_logger(), "Param calibrate_timestamp_offset: %s", calibrate_timestamp_offset_ ? "true" : "false");
   RCLCPP_INFO(get_logger(), "Param calibration_samples: %d", calibration_samples_);
+  RCLCPP_INFO(get_logger(), "Param publish_tf: %s", publish_tf_ ? "true" : "false");
 }
