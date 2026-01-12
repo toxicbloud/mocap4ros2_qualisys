@@ -365,122 +365,70 @@ bool QualisysDriver::connect_qualisys()
 
 void QualisysDriver::calibrate_timestamp_offset()
 {
-  RCLCPP_INFO(get_logger(), "Starting timestamp offset calibration with %d samples...", calibration_samples_);
+  RCLCPP_INFO(get_logger(), "Starting timestamp offset calibration with %d samples using NTP-style ping-pong...", calibration_samples_);
   
   std::vector<int64_t> offset_samples;
   const uint32_t NANOSECONDS_PER_MICROSECOND = 1000;
+  const int64_t NANOSECONDS_PER_SECOND = 1000000000LL;
   
-  // Take control of QTM to enable sending events
-  if (!port_protocol_.TakeControl()) {
-    RCLCPP_WARN(get_logger(), "Failed to take control of QTM, trying calibration without events");
+  // NTP-inspired ping-pong approach to calculate time offset
+  // This method doesn't rely on event notifications from QTM
+  for (int i = 0; i < calibration_samples_; ++i) {
+    // 1. Record PC time just before sending the request (T1)
+    auto t1_send = std::chrono::high_resolution_clock::now();
+    auto t1_ros = rclcpp::Clock().now();
     
-    // Fallback: Collect samples by requesting individual frames
-    for (int i = 0; i < calibration_samples_; ++i) {
-      if (!port_protocol_.GetCurrentFrame(CRTProtocol::cComponent3d + CRTProtocol::cComponent6d)) {
-        RCLCPP_WARN(get_logger(), "Failed to get current frame during calibration sample %d", i);
-        continue;
-      }
-      
-      CRTPacket * prt_packet = port_protocol_.GetRTPacket();
-      if (prt_packet == nullptr) {
-        RCLCPP_WARN(get_logger(), "GetRTPacket returned null during calibration");
-        continue;
-      }
-      
-      CRTPacket::EPacketType e_type;
-      if (port_protocol_.ReceiveRTPacket(e_type, true)) {
-        if (e_type == CRTPacket::PacketData) {
-          auto current_ros_time = rclcpp::Clock().now();
-          uint64_t camera_timestamp_us = prt_packet->GetTimeStamp();
-          int64_t camera_time_ns = static_cast<int64_t>(camera_timestamp_us * NANOSECONDS_PER_MICROSECOND);
-          int64_t ros_time_ns = current_ros_time.nanoseconds();
-          int64_t offset = ros_time_ns - camera_time_ns;
-          offset_samples.push_back(offset);
-          RCLCPP_DEBUG(get_logger(), "Calibration sample %d (fallback): offset = %ld ns", i, offset);
-        }
-      }
-      std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    }
-  } else {
-    RCLCPP_INFO(get_logger(), "Successfully took control of QTM for event-based calibration");
-    
-    // Event-based calibration: send events and wait for event notifications
-    // Note: We don't use StreamFrames here because event notifications come through
-    // the regular TCP connection, not the streaming channel
-    for (int i = 0; i < calibration_samples_; ++i) {
-      // Record system time when we send the event
-      auto trigger_ros_time = rclcpp::Clock().now();
-      
-      // Send event to QTM
-      std::string event_label = "ROS_CALIB_" + std::to_string(i);
-      if (!port_protocol_.SetQTMEvent(event_label.c_str())) {
-        RCLCPP_WARN(get_logger(), "Failed to send calibration event %d", i);
-        continue;
-      }
-      
-      RCLCPP_DEBUG(get_logger(), "Sent calibration event %d", i);
-      
-      // Wait for the event notification (not streaming data, just event packet)
-      bool event_received = false;
-      int attempts = 0;
-      const int max_attempts = 30; // Timeout after ~3 seconds
-      
-      while (!event_received && attempts < max_attempts) {
-        CRTPacket * prt_packet = port_protocol_.GetRTPacket();
-        if (prt_packet == nullptr) {
-          attempts++;
-          std::this_thread::sleep_for(std::chrono::milliseconds(100));
-          continue;
-        }
-        
-        CRTPacket::EPacketType e_type;
-        // Use Receive directly (not ReceiveRTPacket) to get event packets
-        auto response = port_protocol_.Receive(e_type, false, 100); // 100ms timeout, don't skip events
-        
-        if (response == CNetwork::ResponseType::success) {
-          if (e_type == CRTPacket::PacketEvent) {
-            CRTPacket::EEvent event;
-            if (prt_packet->GetEvent(event)) {
-              // Accept any trigger event - we have QTM control so these should be ours
-              if (event == CRTPacket::EventTrigger) {
-                // Get the camera timestamp when the event was recorded
-                uint64_t camera_timestamp_us = prt_packet->GetTimeStamp();
-                int64_t camera_time_ns = static_cast<int64_t>(camera_timestamp_us * NANOSECONDS_PER_MICROSECOND);
-                
-                // Calculate offset: system_time_when_sent - camera_time_when_recorded
-                int64_t ros_time_ns = trigger_ros_time.nanoseconds();
-                int64_t offset = ros_time_ns - camera_time_ns;
-                offset_samples.push_back(offset);
-                
-                RCLCPP_DEBUG(get_logger(), "Calibration sample %d: offset = %ld ns", i, offset);
-                event_received = true;
-              }
-            }
-          }
-        } else if (response == CNetwork::ResponseType::timeout) {
-          // Just a timeout, keep trying
-          attempts++;
-        } else {
-          // Error or disconnect
-          RCLCPP_WARN(get_logger(), "Error receiving packet during calibration");
-          attempts++;
-        }
-      }
-      
-      if (!event_received) {
-        RCLCPP_WARN(get_logger(), "Calibration event %d not received after timeout", i);
-      }
-      
-      // Small delay between samples
-      std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    // 2. Request current frame from QTM (the "ping")
+    if (!port_protocol_.GetCurrentFrame(CRTProtocol::cComponent3d + CRTProtocol::cComponent6d)) {
+      RCLCPP_WARN(get_logger(), "Failed to get current frame during calibration sample %d", i);
+      continue;
     }
     
-    // Release QTM control
-    port_protocol_.ReleaseControl();
-    RCLCPP_INFO(get_logger(), "Released QTM control after calibration");
+    CRTPacket * prt_packet = port_protocol_.GetRTPacket();
+    if (prt_packet == nullptr) {
+      RCLCPP_WARN(get_logger(), "GetRTPacket returned null during calibration");
+      continue;
+    }
+    
+    CRTPacket::EPacketType e_type;
+    if (!port_protocol_.ReceiveRTPacket(e_type, true)) { // Skip events
+      RCLCPP_WARN(get_logger(), "Failed to receive packet during calibration sample %d", i);
+      continue;
+    }
+    
+    // 4. Record PC time when packet is received (T4)
+    auto t4_recv = std::chrono::high_resolution_clock::now();
+    
+    if (e_type == CRTPacket::PacketData) {
+      // 3. Get QTM timestamp from the packet (T2/T3 - when packet was created)
+      uint64_t qtm_timestamp_us = prt_packet->GetTimeStamp();
+      int64_t qtm_time_ns = static_cast<int64_t>(qtm_timestamp_us * NANOSECONDS_PER_MICROSECOND);
+      
+      // Calculate round-trip time (RTT)
+      auto rtt = std::chrono::duration_cast<std::chrono::nanoseconds>(t4_recv - t1_send);
+      int64_t rtt_ns = rtt.count();
+      
+      // NTP formula: estimate PC time at the moment the QTM packet was created
+      // Assuming symmetric network delay, the packet was created at midpoint of RTT
+      int64_t t1_ns = t1_ros.nanoseconds();
+      int64_t pc_time_at_packet_creation_ns = t1_ns + (rtt_ns / 2);
+      
+      // Calculate offset: PC_time = QTM_time + offset
+      // Therefore: offset = PC_time - QTM_time
+      int64_t offset = pc_time_at_packet_creation_ns - qtm_time_ns;
+      offset_samples.push_back(offset);
+      
+      RCLCPP_DEBUG(get_logger(), "Calibration sample %d: RTT=%ld ns, offset=%ld ns", 
+                   i, rtt_ns, offset);
+    } else {
+      RCLCPP_WARN(get_logger(), "Received non-data packet during calibration sample %d", i);
+    }
+    
+    // Small delay between samples to avoid overwhelming the system
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
   }
   
-  // Calculate average offset
+  // Calculate median offset (more robust against outliers than mean)
   if (offset_samples.empty()) {
     RCLCPP_ERROR(get_logger(), "No calibration samples collected, using zero offset");
     timestamp_offset_ns_ = 0;
@@ -488,14 +436,28 @@ void QualisysDriver::calibrate_timestamp_offset()
     return;
   }
   
+  // Sort samples to find median
+  std::sort(offset_samples.begin(), offset_samples.end());
+  
+  // Calculate median
+  size_t n = offset_samples.size();
+  if (n % 2 == 0) {
+    // Even number of samples: average of two middle values
+    timestamp_offset_ns_ = (offset_samples[n/2 - 1] + offset_samples[n/2]) / 2;
+  } else {
+    // Odd number of samples: middle value
+    timestamp_offset_ns_ = offset_samples[n/2];
+  }
+  timestamp_offset_calibrated_ = true;
+  
+  // Also calculate mean for comparison
   int64_t sum = 0;
   for (int64_t offset : offset_samples) {
     sum += offset;
   }
-  timestamp_offset_ns_ = sum / static_cast<int64_t>(offset_samples.size());
-  timestamp_offset_calibrated_ = true;
+  int64_t mean_offset = sum / static_cast<int64_t>(offset_samples.size());
   
-  // Calculate standard deviation for information
+  // Calculate standard deviation from median
   int64_t variance_sum = 0;
   for (int64_t offset : offset_samples) {
     int64_t diff = offset - timestamp_offset_ns_;
@@ -505,11 +467,14 @@ void QualisysDriver::calibrate_timestamp_offset()
   size_t divisor = offset_samples.size() > 1 ? offset_samples.size() - 1 : 1;
   double std_dev_ns = std::sqrt(static_cast<double>(variance_sum) / divisor);
   
-  RCLCPP_INFO(get_logger(), "Timestamp offset calibration complete:");
+  RCLCPP_INFO(get_logger(), "Timestamp offset calibration complete (NTP-style):");
   RCLCPP_INFO(get_logger(), "  Samples collected: %zu", offset_samples.size());
-  RCLCPP_INFO(get_logger(), "  Average offset: %ld ns (%.6f s)", 
+  RCLCPP_INFO(get_logger(), "  Median offset: %ld ns (%.6f s)", 
               timestamp_offset_ns_, timestamp_offset_ns_ / 1e9);
+  RCLCPP_INFO(get_logger(), "  Mean offset: %ld ns (%.6f s)", 
+              mean_offset, mean_offset / 1e9);
   RCLCPP_INFO(get_logger(), "  Standard deviation: %.6f ms", std_dev_ns / 1e6);
+  RCLCPP_INFO(get_logger(), "  Using MEDIAN for robustness against network jitter");
 }
 
 

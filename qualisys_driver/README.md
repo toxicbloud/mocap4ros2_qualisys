@@ -29,16 +29,23 @@ When Qualisys cameras are not synchronized with UTC time via PTP (Precision Time
 2. Set `calibrate_timestamp_offset: true` to enable offset calibration
 3. Optionally adjust `calibration_samples` (default: 10) for calibration accuracy
 
-The calibration process:
-- Takes control of QTM to enable sending software events
-- Sends timestamped software events to QTM at known system times
-- Waits for event notifications (separate from streaming data) with camera timestamps
-- Calculates the offset between system time (when event was sent) and camera time (when event was recorded)
-- Averages multiple samples for better accuracy
-- Releases QTM control after calibration
+The calibration process uses an **NTP-inspired ping-pong approach**:
 
-**Note:** Event notifications are sent over the TCP connection separately from streaming data, so the calibration listens for event packets directly rather than using the streaming protocol.
+1. **Send "ping"**: Request a frame from QTM using `GetCurrentFrame()` and record the send time (T1)
+2. **Receive "pong"**: Receive the frame packet with QTM's timestamp (T2/T3) and record the receive time (T4)
+3. **Calculate RTT**: Round-trip time = T4 - T1
+4. **Estimate midpoint**: Assume the packet was created at T1 + (RTT/2), accounting for symmetric network delay
+5. **Calculate offset**: PC_time_at_midpoint - QTM_timestamp
+6. **Average samples**: Collect multiple measurements and use the median for robustness
 
-If taking control fails (e.g., another application has control), it falls back to a simpler approach that compares frame reception time with camera timestamps.
+This method is more reliable than event-based approaches because:
+- QTM doesn't reliably send event notifications back through the protocol
+- It uses the actual data stream that's continuously available
+- The NTP-style calculation accounts for network latency
+- Multiple samples with median filtering removes outliers from network jitter
+
+**Formula**: `Offset = PC_time_estimated_at_packet_creation - QTM_timestamp`
+
+Where `PC_time_estimated_at_packet_creation = T1_send + (RTT / 2)`
 
 This ensures that published ROS messages have accurate timestamps that reflect the true capture time while maintaining synchronization across the system.
