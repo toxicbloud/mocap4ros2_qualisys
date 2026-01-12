@@ -207,6 +207,35 @@ void QualisysDriver::process_packet(CRTPacket * const packet)
 
     mocap_rigid_bodies_pub_->publish(msg_rb);
   }
+
+  // Publish TF transforms for rigid bodies if enabled
+  if (publish_tf_ && rb_count > 0) {
+    for (unsigned int i = 0; i < rb_count; i++) {
+      float x, y, z;
+      float rot_matrix[9];
+      packet->Get6DOFBody(i, x, y, z, rot_matrix);
+      Quaternion quaternion = matrixToQuaternion(rot_matrix);
+
+      const char* label = port_protocol_.Get6DOFBodyName(i);
+
+      // Create and publish transform
+      geometry_msgs::msg::TransformStamped transform_stamped;
+      transform_stamped.header.stamp = timestamp;
+      transform_stamped.header.frame_id = frame_id_;  // "qualisys" - world frame
+      transform_stamped.child_frame_id = label;       // rigid body name
+
+      transform_stamped.transform.translation.x = x / 1000;
+      transform_stamped.transform.translation.y = y / 1000;
+      transform_stamped.transform.translation.z = z / 1000;
+
+      transform_stamped.transform.rotation.x = quaternion.x;
+      transform_stamped.transform.rotation.y = quaternion.y;
+      transform_stamped.transform.rotation.z = quaternion.z;
+      transform_stamped.transform.rotation.w = quaternion.w;
+
+      tf_broadcaster_->sendTransform(transform_stamped);
+    }
+  }
 }
 
 bool QualisysDriver::stop_qualisys()
@@ -522,6 +551,7 @@ void QualisysDriver::initParameters()
   declare_parameter<bool>("use_system_timestamp", true);
   declare_parameter<bool>("calibrate_timestamp_offset", false);
   declare_parameter<int>("calibration_samples", 10);
+  declare_parameter<bool>("publish_tf", true);
 
   get_parameter<std::string>("host_name", host_name_);
   get_parameter<int>("port", port_);
@@ -537,6 +567,7 @@ void QualisysDriver::initParameters()
   get_parameter<bool>("use_system_timestamp", use_system_timestamp_);
   get_parameter<bool>("calibrate_timestamp_offset", calibrate_timestamp_offset_);
   get_parameter<int>("calibration_samples", calibration_samples_);
+  get_parameter<bool>("publish_tf", publish_tf_);
 
   // Initialize calibration state
   timestamp_offset_ns_ = 0;
@@ -556,4 +587,5 @@ void QualisysDriver::initParameters()
   RCLCPP_INFO(get_logger(), "Param use_system_timestamp: %s", use_system_timestamp_ ? "true" : "false");
   RCLCPP_INFO(get_logger(), "Param calibrate_timestamp_offset: %s", calibrate_timestamp_offset_ ? "true" : "false");
   RCLCPP_INFO(get_logger(), "Param calibration_samples: %d", calibration_samples_);
+  RCLCPP_INFO(get_logger(), "Param publish_tf: %s", publish_tf_ ? "true" : "false");
 }

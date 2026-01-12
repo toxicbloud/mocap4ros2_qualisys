@@ -49,6 +49,7 @@
 
 #include "tf2/buffer_core.h"
 #include "tf2_ros/transform_broadcaster.h"
+#include "geometry_msgs/msg/transform_stamped.hpp"
 
 #include "RTProtocol.h"
 
@@ -105,6 +106,7 @@ private:
   int calibration_samples_;
   int64_t timestamp_offset_ns_;
   bool timestamp_offset_calibrated_;
+  bool publish_tf_;
   std::shared_ptr<rclcpp::Client<lifecycle_msgs::srv::ChangeState>> client_change_state_;
   rclcpp_lifecycle::LifecyclePublisher<mocap4r2_msgs::msg::Markers>::SharedPtr mocap_markers_pub_;
   rclcpp_lifecycle::LifecyclePublisher<mocap4r2_msgs::msg::RigidBodies>::SharedPtr
