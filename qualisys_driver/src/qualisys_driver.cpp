@@ -224,23 +224,30 @@ void QualisysDriver::process_packet(CRTPacket * const packet)
         msg_rb.rigidbodies.push_back(rb);
       }
 
-      // Collect TF transform if enabled
+      // Collect TF transform if enabled and data is valid (no NaN values)
       if (publish_tf_) {
-        geometry_msgs::msg::TransformStamped transform_stamped;
-        transform_stamped.header.stamp = timestamp;
-        transform_stamped.header.frame_id = frame_id_;  // "qualisys" - world frame
-        transform_stamped.child_frame_id = label;       // rigid body name
+        // Check if position and orientation are valid (no NaN values)
+        bool position_valid = !std::isnan(x) && !std::isnan(y) && !std::isnan(z);
+        bool orientation_valid = !std::isnan(quaternion.x) && !std::isnan(quaternion.y) && 
+                                 !std::isnan(quaternion.z) && !std::isnan(quaternion.w);
+        
+        if (position_valid && orientation_valid) {
+          geometry_msgs::msg::TransformStamped transform_stamped;
+          transform_stamped.header.stamp = timestamp;
+          transform_stamped.header.frame_id = frame_id_;  // "qualisys" - world frame
+          transform_stamped.child_frame_id = label;       // rigid body name
 
-        transform_stamped.transform.translation.x = x * MILLIMETERS_TO_METERS;
-        transform_stamped.transform.translation.y = y * MILLIMETERS_TO_METERS;
-        transform_stamped.transform.translation.z = z * MILLIMETERS_TO_METERS;
+          transform_stamped.transform.translation.x = x * MILLIMETERS_TO_METERS;
+          transform_stamped.transform.translation.y = y * MILLIMETERS_TO_METERS;
+          transform_stamped.transform.translation.z = z * MILLIMETERS_TO_METERS;
 
-        transform_stamped.transform.rotation.x = quaternion.x;
-        transform_stamped.transform.rotation.y = quaternion.y;
-        transform_stamped.transform.rotation.z = quaternion.z;
-        transform_stamped.transform.rotation.w = quaternion.w;
+          transform_stamped.transform.rotation.x = quaternion.x;
+          transform_stamped.transform.rotation.y = quaternion.y;
+          transform_stamped.transform.rotation.z = quaternion.z;
+          transform_stamped.transform.rotation.w = quaternion.w;
 
-        tf_transforms.push_back(transform_stamped);
+          tf_transforms.push_back(transform_stamped);
+        }
       }
     }
 
