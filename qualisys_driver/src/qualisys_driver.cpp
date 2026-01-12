@@ -179,13 +179,14 @@ void QualisysDriver::process_packet(CRTPacket * const packet)
   if (mocap_rigid_bodies_pub_->get_subscription_count() > 0 || publish_tf_) {
     std::vector<geometry_msgs::msg::TransformStamped> tf_transforms;
     
+    // Check if we should publish rigid body messages
+    bool publish_rigid_bodies = mocap_rigid_bodies_pub_->get_subscription_count() > 0;
+    
     // Prepare rigid bodies message if we have subscribers
     mocap4r2_msgs::msg::RigidBodies msg_rb;
-    if (mocap_rigid_bodies_pub_->get_subscription_count() > 0) {
-      msg_rb.header.frame_id = frame_id_;
-      msg_rb.header.stamp = timestamp;
-      msg_rb.frame_number = frame_number;
-    }
+    msg_rb.header.frame_id = frame_id_;
+    msg_rb.header.stamp = timestamp;
+    msg_rb.frame_number = frame_number;
 
     for (unsigned int i = 0; i < rb_count; i++) {
       float x, y, z;
@@ -202,8 +203,8 @@ void QualisysDriver::process_packet(CRTPacket * const packet)
         continue;
       }
 
-      // Publish rigid body message if we have subscribers
-      if (mocap_rigid_bodies_pub_->get_subscription_count() > 0) {
+      // Add rigid body to message if we have subscribers
+      if (publish_rigid_bodies) {
         mocap4r2_msgs::msg::RigidBody rb;
         rb.rigid_body_name = label;
         rb.pose.position.x = x / 1000;
@@ -238,7 +239,7 @@ void QualisysDriver::process_packet(CRTPacket * const packet)
     }
 
     // Publish rigid bodies message if we have subscribers
-    if (mocap_rigid_bodies_pub_->get_subscription_count() > 0) {
+    if (publish_rigid_bodies) {
       mocap_rigid_bodies_pub_->publish(msg_rb);
     }
 
