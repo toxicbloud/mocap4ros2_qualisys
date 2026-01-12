@@ -176,15 +176,17 @@ void QualisysDriver::process_packet(CRTPacket * const packet)
     mocap_markers_pub_->publish(markers_msg);
   }
 
-  if (mocap_rigid_bodies_pub_->get_subscription_count() > 0) {
+  if (mocap_rigid_bodies_pub_->get_subscription_count() > 0 || publish_tf_) {
     mocap4r2_msgs::msg::RigidBodies msg_rb;
-    msg_rb.header.frame_id = frame_id_;
-    msg_rb.header.stamp = timestamp;
-    msg_rb.frame_number = frame_number;
+    
+    // Only prepare message if we have subscribers
+    if (mocap_rigid_bodies_pub_->get_subscription_count() > 0) {
+      msg_rb.header.frame_id = frame_id_;
+      msg_rb.header.stamp = timestamp;
+      msg_rb.frame_number = frame_number;
+    }
 
     for (unsigned int i = 0; i < rb_count; i++) {
-      mocap4r2_msgs::msg::RigidBody rb;
-
       float x, y, z;
       float rot_matrix[9];
       // Get6DOFBody(unsigned int nBodyIndex, float &fX, float &fY, float &fZ, float afRotMatrix[9]);
@@ -192,48 +194,51 @@ void QualisysDriver::process_packet(CRTPacket * const packet)
       Quaternion quaternion = matrixToQuaternion(rot_matrix);
 
       const char* label = port_protocol_.Get6DOFBodyName(i);
-  
-      rb.rigid_body_name = label;
-      rb.pose.position.x = x / 1000;
-      rb.pose.position.y = y / 1000;
-      rb.pose.position.z = z / 1000;
-      rb.pose.orientation.x = quaternion.x;
-      rb.pose.orientation.y = quaternion.y;
-      rb.pose.orientation.z = quaternion.z;
-      rb.pose.orientation.w = quaternion.w;
+      
+      // Skip this rigid body if name is null
+      if (label == nullptr) {
+        RCLCPP_WARN(get_logger(), "Rigid body %d has null name, skipping", i);
+        continue;
+      }
 
-      msg_rb.rigidbodies.push_back(rb);
+      // Publish rigid body message if we have subscribers
+      if (mocap_rigid_bodies_pub_->get_subscription_count() > 0) {
+        mocap4r2_msgs::msg::RigidBody rb;
+        rb.rigid_body_name = label;
+        rb.pose.position.x = x / 1000;
+        rb.pose.position.y = y / 1000;
+        rb.pose.position.z = z / 1000;
+        rb.pose.orientation.x = quaternion.x;
+        rb.pose.orientation.y = quaternion.y;
+        rb.pose.orientation.z = quaternion.z;
+        rb.pose.orientation.w = quaternion.w;
+
+        msg_rb.rigidbodies.push_back(rb);
+      }
+
+      // Publish TF transform if enabled
+      if (publish_tf_) {
+        geometry_msgs::msg::TransformStamped transform_stamped;
+        transform_stamped.header.stamp = timestamp;
+        transform_stamped.header.frame_id = frame_id_;  // "qualisys" - world frame
+        transform_stamped.child_frame_id = label;       // rigid body name
+
+        transform_stamped.transform.translation.x = x / 1000;
+        transform_stamped.transform.translation.y = y / 1000;
+        transform_stamped.transform.translation.z = z / 1000;
+
+        transform_stamped.transform.rotation.x = quaternion.x;
+        transform_stamped.transform.rotation.y = quaternion.y;
+        transform_stamped.transform.rotation.z = quaternion.z;
+        transform_stamped.transform.rotation.w = quaternion.w;
+
+        tf_broadcaster_->sendTransform(transform_stamped);
+      }
     }
 
-    mocap_rigid_bodies_pub_->publish(msg_rb);
-  }
-
-  // Publish TF transforms for rigid bodies if enabled
-  if (publish_tf_ && rb_count > 0) {
-    for (unsigned int i = 0; i < rb_count; i++) {
-      float x, y, z;
-      float rot_matrix[9];
-      packet->Get6DOFBody(i, x, y, z, rot_matrix);
-      Quaternion quaternion = matrixToQuaternion(rot_matrix);
-
-      const char* label = port_protocol_.Get6DOFBodyName(i);
-
-      // Create and publish transform
-      geometry_msgs::msg::TransformStamped transform_stamped;
-      transform_stamped.header.stamp = timestamp;
-      transform_stamped.header.frame_id = frame_id_;  // "qualisys" - world frame
-      transform_stamped.child_frame_id = label;       // rigid body name
-
-      transform_stamped.transform.translation.x = x / 1000;
-      transform_stamped.transform.translation.y = y / 1000;
-      transform_stamped.transform.translation.z = z / 1000;
-
-      transform_stamped.transform.rotation.x = quaternion.x;
-      transform_stamped.transform.rotation.y = quaternion.y;
-      transform_stamped.transform.rotation.z = quaternion.z;
-      transform_stamped.transform.rotation.w = quaternion.w;
-
-      tf_broadcaster_->sendTransform(transform_stamped);
+    // Publish rigid bodies message if we have subscribers
+    if (mocap_rigid_bodies_pub_->get_subscription_count() > 0) {
+      mocap_rigid_bodies_pub_->publish(msg_rb);
     }
   }
 }
