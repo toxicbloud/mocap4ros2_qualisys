@@ -177,7 +177,11 @@ void QualisysDriver::process_packet(CRTPacket * const packet)
   }
 
   if (mocap_rigid_bodies_pub_->get_subscription_count() > 0 || publish_tf_) {
+    // Reserve capacity for TF transforms to avoid reallocations
     std::vector<geometry_msgs::msg::TransformStamped> tf_transforms;
+    if (publish_tf_ && rb_count > 0) {
+      tf_transforms.reserve(rb_count);
+    }
     
     // Check if we should publish rigid body messages
     bool publish_rigid_bodies = mocap_rigid_bodies_pub_->get_subscription_count() > 0;
