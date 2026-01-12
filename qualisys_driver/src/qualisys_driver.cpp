@@ -24,6 +24,8 @@
 #include <memory>
 #include <algorithm>
 #include <utility>
+#include <thread>
+#include <chrono>
 #include "qualisys_driver/qualisys_driver.hpp"
 #include "lifecycle_msgs/msg/state.hpp"
 #include <iostream>
@@ -127,8 +129,27 @@ void QualisysDriver::process_packet(CRTPacket * const packet)
   }
   last_frame_number_ = frame_number;
 
-  // Get timestamp once for all messages
-  rclcpp::Time timestamp = rclcpp::Clock().now();
+  // Get timestamp - use Qualisys timestamp if use_system_timestamp is false
+  rclcpp::Time timestamp;
+  if (use_system_timestamp_) {
+    timestamp = rclcpp::Clock().now();
+  } else {
+    // GetTimeStamp() returns timestamp in microseconds
+    const uint64_t MICROSECONDS_PER_SECOND = 1000000;
+    const uint32_t NANOSECONDS_PER_MICROSECOND = 1000;
+    
+    uint64_t qualisys_timestamp_us = packet->GetTimeStamp();
+    // Convert microseconds to nanoseconds
+    int64_t camera_time_ns = static_cast<int64_t>(qualisys_timestamp_us * NANOSECONDS_PER_MICROSECOND);
+    
+    // Apply calibrated offset if available
+    if (calibrate_timestamp_offset_ && timestamp_offset_calibrated_) {
+      camera_time_ns += timestamp_offset_ns_;
+    }
+    
+    // Convert to ROS time
+    timestamp = rclcpp::Time(camera_time_ns);
+  }
 
   if (mocap_markers_pub_->is_activated() && mocap_markers_pub_->get_subscription_count() > 0) {
     mocap4r2_msgs::msg::Markers markers_msg;
@@ -284,6 +305,11 @@ CallbackReturnT QualisysDriver::on_activate(const rclcpp_lifecycle::State &)
   bool success = connect_qualisys();
 
   if (success) {
+    // Perform timestamp offset calibration if enabled and not using system timestamp
+    if (!use_system_timestamp_ && calibrate_timestamp_offset_) {
+      calibrate_timestamp_offset();
+    }
+    
     timer_ = this->create_wall_timer(std::chrono::milliseconds(1000 / publish_rate_), std::bind(&QualisysDriver::loop, this));
     RCLCPP_INFO(get_logger(), "Activated!\n");
 
@@ -360,6 +386,148 @@ bool QualisysDriver::connect_qualisys()
   return settings_read;
 }
 
+void QualisysDriver::calibrate_timestamp_offset()
+{
+  RCLCPP_INFO(get_logger(), "Starting timestamp offset calibration with %d samples using NTP-style ping-pong...", calibration_samples_);
+  
+  std::vector<int64_t> offset_samples;
+  const uint32_t NANOSECONDS_PER_MICROSECOND = 1000;
+  const int64_t NANOSECONDS_PER_SECOND = 1000000000LL;
+  const int TIMEOUT_MICROSECONDS = 1000000; // 1 second timeout per packet
+  
+  int consecutive_failures = 0;
+  const int MAX_CONSECUTIVE_FAILURES = 5; // Abort if 5 failures in a row
+  
+  // NTP-inspired ping-pong approach to calculate time offset
+  // This method doesn't rely on event notifications from QTM
+  for (int i = 0; i < calibration_samples_; ++i) {
+    // 1. Record PC time just before sending the request (T1)
+    auto t1_send = std::chrono::high_resolution_clock::now();
+    auto t1_ros = rclcpp::Clock().now();
+    
+    // 2. Request current frame from QTM (the "ping")
+    if (!port_protocol_.GetCurrentFrame(CRTProtocol::cComponent3d + CRTProtocol::cComponent6d)) {
+      RCLCPP_WARN(get_logger(), "Failed to get current frame during calibration sample %d", i);
+      consecutive_failures++;
+      if (consecutive_failures >= MAX_CONSECUTIVE_FAILURES) {
+        RCLCPP_ERROR(get_logger(), "Too many consecutive failures (%d), aborting calibration", consecutive_failures);
+        break;
+      }
+      continue;
+    }
+    
+    CRTPacket * prt_packet = port_protocol_.GetRTPacket();
+    if (prt_packet == nullptr) {
+      RCLCPP_WARN(get_logger(), "GetRTPacket returned null during calibration");
+      consecutive_failures++;
+      if (consecutive_failures >= MAX_CONSECUTIVE_FAILURES) {
+        RCLCPP_ERROR(get_logger(), "Too many consecutive failures (%d), aborting calibration", consecutive_failures);
+        break;
+      }
+      continue;
+    }
+    
+    CRTPacket::EPacketType e_type;
+    // Use a 1-second timeout instead of default 5 seconds to avoid long hangs
+    if (!port_protocol_.ReceiveRTPacket(e_type, true, TIMEOUT_MICROSECONDS)) { // Skip events, 1s timeout
+      RCLCPP_WARN(get_logger(), "Failed to receive packet during calibration sample %d (timeout)", i);
+      consecutive_failures++;
+      if (consecutive_failures >= MAX_CONSECUTIVE_FAILURES) {
+        RCLCPP_ERROR(get_logger(), "Too many consecutive failures (%d), aborting calibration", consecutive_failures);
+        break;
+      }
+      continue;
+    }
+    
+    // 4. Record PC time when packet is received (T4)
+    auto t4_recv = std::chrono::high_resolution_clock::now();
+    
+    if (e_type == CRTPacket::PacketData) {
+      // 3. Get QTM timestamp from the packet (T2/T3 - when packet was created)
+      uint64_t qtm_timestamp_us = prt_packet->GetTimeStamp();
+      int64_t qtm_time_ns = static_cast<int64_t>(qtm_timestamp_us * NANOSECONDS_PER_MICROSECOND);
+      
+      // Calculate round-trip time (RTT)
+      auto rtt = std::chrono::duration_cast<std::chrono::nanoseconds>(t4_recv - t1_send);
+      int64_t rtt_ns = rtt.count();
+      
+      // NTP formula: estimate PC time at the moment the QTM packet was created
+      // Assuming symmetric network delay, the packet was created at midpoint of RTT
+      int64_t t1_ns = t1_ros.nanoseconds();
+      int64_t pc_time_at_packet_creation_ns = t1_ns + (rtt_ns / 2);
+      
+      // Calculate offset: PC_time = QTM_time + offset
+      // Therefore: offset = PC_time - QTM_time
+      int64_t offset = pc_time_at_packet_creation_ns - qtm_time_ns;
+      offset_samples.push_back(offset);
+      
+      // Reset consecutive failure counter on success
+      consecutive_failures = 0;
+      
+      RCLCPP_DEBUG(get_logger(), "Calibration sample %d: RTT=%ld ns, offset=%ld ns", 
+                   i, rtt_ns, offset);
+    } else {
+      RCLCPP_WARN(get_logger(), "Received non-data packet during calibration sample %d", i);
+      consecutive_failures++;
+      if (consecutive_failures >= MAX_CONSECUTIVE_FAILURES) {
+        RCLCPP_ERROR(get_logger(), "Too many consecutive failures (%d), aborting calibration", consecutive_failures);
+        break;
+      }
+    }
+    
+    // Small delay between samples to avoid overwhelming the system
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  
+  // Calculate median offset (more robust against outliers than mean)
+  if (offset_samples.empty()) {
+    RCLCPP_ERROR(get_logger(), "No calibration samples collected, using zero offset");
+    timestamp_offset_ns_ = 0;
+    timestamp_offset_calibrated_ = false;
+    return;
+  }
+  
+  // Sort samples to find median
+  std::sort(offset_samples.begin(), offset_samples.end());
+  
+  // Calculate median
+  size_t n = offset_samples.size();
+  if (n % 2 == 0) {
+    // Even number of samples: average of two middle values
+    timestamp_offset_ns_ = (offset_samples[n/2 - 1] + offset_samples[n/2]) / 2;
+  } else {
+    // Odd number of samples: middle value
+    timestamp_offset_ns_ = offset_samples[n/2];
+  }
+  timestamp_offset_calibrated_ = true;
+  
+  // Also calculate mean for comparison
+  int64_t sum = 0;
+  for (int64_t offset : offset_samples) {
+    sum += offset;
+  }
+  int64_t mean_offset = sum / static_cast<int64_t>(offset_samples.size());
+  
+  // Calculate standard deviation from median
+  int64_t variance_sum = 0;
+  for (int64_t offset : offset_samples) {
+    int64_t diff = offset - timestamp_offset_ns_;
+    variance_sum += diff * diff;
+  }
+  // Use sample standard deviation (divide by n-1) for better accuracy with small samples
+  size_t divisor = offset_samples.size() > 1 ? offset_samples.size() - 1 : 1;
+  double std_dev_ns = std::sqrt(static_cast<double>(variance_sum) / divisor);
+  
+  RCLCPP_INFO(get_logger(), "Timestamp offset calibration complete (NTP-style):");
+  RCLCPP_INFO(get_logger(), "  Samples collected: %zu", offset_samples.size());
+  RCLCPP_INFO(get_logger(), "  Median offset: %ld ns (%.6f s)", 
+              timestamp_offset_ns_, timestamp_offset_ns_ / 1e9);
+  RCLCPP_INFO(get_logger(), "  Mean offset: %ld ns (%.6f s)", 
+              mean_offset, mean_offset / 1e9);
+  RCLCPP_INFO(get_logger(), "  Standard deviation: %.6f ms", std_dev_ns / 1e6);
+  RCLCPP_INFO(get_logger(), "  Using MEDIAN for robustness against network jitter");
+}
+
 void QualisysDriver::initParameters()
 {
   declare_parameter<std::string>("host_name", "mocap");
@@ -373,6 +541,9 @@ void QualisysDriver::initParameters()
   declare_parameter<bool>("use_markers_with_id", true);
   declare_parameter<int>("publish_rate", 10);
   declare_parameter<std::string>("frame_id", "map");
+  declare_parameter<bool>("use_system_timestamp", true);
+  declare_parameter<bool>("calibrate_timestamp_offset", false);
+  declare_parameter<int>("calibration_samples", 100);
 
   get_parameter<std::string>("host_name", host_name_);
   get_parameter<int>("port", port_);
@@ -385,6 +556,13 @@ void QualisysDriver::initParameters()
   get_parameter<bool>("use_markers_with_id", use_markers_with_id_);
   get_parameter<int>("publish_rate", publish_rate_);
   get_parameter<std::string>("frame_id", frame_id_);
+  get_parameter<bool>("use_system_timestamp", use_system_timestamp_);
+  get_parameter<bool>("calibrate_timestamp_offset", calibrate_timestamp_offset_);
+  get_parameter<int>("calibration_samples", calibration_samples_);
+
+  // Initialize calibration state
+  timestamp_offset_ns_ = 0;
+  timestamp_offset_calibrated_ = false;
 
   RCLCPP_INFO(get_logger(), "Param host_name: %s", host_name_.c_str());
   RCLCPP_INFO(get_logger(), "Param port: %d", port_);
@@ -397,4 +575,7 @@ void QualisysDriver::initParameters()
   RCLCPP_INFO(get_logger(), "Param use_markers_with_id: %s", use_markers_with_id_ ? "true" : "false");
   RCLCPP_INFO(get_logger(), "Param publish_rate: %d", publish_rate_);
   RCLCPP_INFO(get_logger(), "Param frame_id: %s", frame_id_.c_str());
+  RCLCPP_INFO(get_logger(), "Param use_system_timestamp: %s", use_system_timestamp_ ? "true" : "false");
+  RCLCPP_INFO(get_logger(), "Param calibrate_timestamp_offset: %s", calibrate_timestamp_offset_ ? "true" : "false");
+  RCLCPP_INFO(get_logger(), "Param calibration_samples: %d", calibration_samples_);
 }
