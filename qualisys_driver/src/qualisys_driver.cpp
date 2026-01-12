@@ -178,6 +178,7 @@ void QualisysDriver::process_packet(CRTPacket * const packet)
 
   if (mocap_rigid_bodies_pub_->get_subscription_count() > 0 || publish_tf_) {
     mocap4r2_msgs::msg::RigidBodies msg_rb;
+    std::vector<geometry_msgs::msg::TransformStamped> tf_transforms;
     
     // Only prepare message if we have subscribers
     if (mocap_rigid_bodies_pub_->get_subscription_count() > 0) {
@@ -216,7 +217,7 @@ void QualisysDriver::process_packet(CRTPacket * const packet)
         msg_rb.rigidbodies.push_back(rb);
       }
 
-      // Publish TF transform if enabled
+      // Collect TF transform if enabled
       if (publish_tf_) {
         geometry_msgs::msg::TransformStamped transform_stamped;
         transform_stamped.header.stamp = timestamp;
@@ -232,13 +233,18 @@ void QualisysDriver::process_packet(CRTPacket * const packet)
         transform_stamped.transform.rotation.z = quaternion.z;
         transform_stamped.transform.rotation.w = quaternion.w;
 
-        tf_broadcaster_->sendTransform(transform_stamped);
+        tf_transforms.push_back(transform_stamped);
       }
     }
 
     // Publish rigid bodies message if we have subscribers
     if (mocap_rigid_bodies_pub_->get_subscription_count() > 0) {
       mocap_rigid_bodies_pub_->publish(msg_rb);
+    }
+
+    // Publish all TF transforms as a batch
+    if (publish_tf_ && !tf_transforms.empty()) {
+      tf_broadcaster_->sendTransform(tf_transforms);
     }
   }
 }
