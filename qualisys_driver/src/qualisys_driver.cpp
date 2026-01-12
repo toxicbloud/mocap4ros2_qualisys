@@ -370,6 +370,10 @@ void QualisysDriver::calibrate_timestamp_offset()
   std::vector<int64_t> offset_samples;
   const uint32_t NANOSECONDS_PER_MICROSECOND = 1000;
   const int64_t NANOSECONDS_PER_SECOND = 1000000000LL;
+  const int TIMEOUT_MICROSECONDS = 1000000; // 1 second timeout per packet
+  
+  int consecutive_failures = 0;
+  const int MAX_CONSECUTIVE_FAILURES = 5; // Abort if 5 failures in a row
   
   // NTP-inspired ping-pong approach to calculate time offset
   // This method doesn't rely on event notifications from QTM
@@ -381,18 +385,34 @@ void QualisysDriver::calibrate_timestamp_offset()
     // 2. Request current frame from QTM (the "ping")
     if (!port_protocol_.GetCurrentFrame(CRTProtocol::cComponent3d + CRTProtocol::cComponent6d)) {
       RCLCPP_WARN(get_logger(), "Failed to get current frame during calibration sample %d", i);
+      consecutive_failures++;
+      if (consecutive_failures >= MAX_CONSECUTIVE_FAILURES) {
+        RCLCPP_ERROR(get_logger(), "Too many consecutive failures (%d), aborting calibration", consecutive_failures);
+        break;
+      }
       continue;
     }
     
     CRTPacket * prt_packet = port_protocol_.GetRTPacket();
     if (prt_packet == nullptr) {
       RCLCPP_WARN(get_logger(), "GetRTPacket returned null during calibration");
+      consecutive_failures++;
+      if (consecutive_failures >= MAX_CONSECUTIVE_FAILURES) {
+        RCLCPP_ERROR(get_logger(), "Too many consecutive failures (%d), aborting calibration", consecutive_failures);
+        break;
+      }
       continue;
     }
     
     CRTPacket::EPacketType e_type;
-    if (!port_protocol_.ReceiveRTPacket(e_type, true)) { // Skip events
-      RCLCPP_WARN(get_logger(), "Failed to receive packet during calibration sample %d", i);
+    // Use a 1-second timeout instead of default 5 seconds to avoid long hangs
+    if (!port_protocol_.ReceiveRTPacket(e_type, true, TIMEOUT_MICROSECONDS)) { // Skip events, 1s timeout
+      RCLCPP_WARN(get_logger(), "Failed to receive packet during calibration sample %d (timeout)", i);
+      consecutive_failures++;
+      if (consecutive_failures >= MAX_CONSECUTIVE_FAILURES) {
+        RCLCPP_ERROR(get_logger(), "Too many consecutive failures (%d), aborting calibration", consecutive_failures);
+        break;
+      }
       continue;
     }
     
@@ -418,10 +438,18 @@ void QualisysDriver::calibrate_timestamp_offset()
       int64_t offset = pc_time_at_packet_creation_ns - qtm_time_ns;
       offset_samples.push_back(offset);
       
+      // Reset consecutive failure counter on success
+      consecutive_failures = 0;
+      
       RCLCPP_DEBUG(get_logger(), "Calibration sample %d: RTT=%ld ns, offset=%ld ns", 
                    i, rtt_ns, offset);
     } else {
       RCLCPP_WARN(get_logger(), "Received non-data packet during calibration sample %d", i);
+      consecutive_failures++;
+      if (consecutive_failures >= MAX_CONSECUTIVE_FAILURES) {
+        RCLCPP_ERROR(get_logger(), "Too many consecutive failures (%d), aborting calibration", consecutive_failures);
+        break;
+      }
     }
     
     // Small delay between samples to avoid overwhelming the system
