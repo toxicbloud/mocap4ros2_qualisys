@@ -13,4 +13,4 @@ qualisys_driver_node:
     frame_id: "qualisys"
     use_system_timestamp: true            # true: use ROS now() timestamp, false: use Qualisys camera timestamp
     calibrate_timestamp_offset: false     # true: calibrate offset between camera and system time (only used when use_system_timestamp is false)
-    calibration_samples: 10               # Number of samples to collect for offset calibration
+    calibration_samples: 100               # Number of samples to collect for offset calibration
