@@ -34,6 +34,8 @@
 
 using namespace std::chrono_literals;
 
+// Conversion factor from millimeters to meters
+constexpr double MILLIMETERS_TO_METERS = 0.001;
 
 struct Quaternion {
     float w, x, y, z;
@@ -165,9 +167,9 @@ void QualisysDriver::process_packet(CRTPacket * const packet)
       packet->Get3DMarker((float)i, x, y, z);
       mocap4r2_msgs::msg::Marker this_marker;
       this_marker.marker_index = i;
-      this_marker.translation.x = x / 1000;
-      this_marker.translation.y = y / 1000;
-      this_marker.translation.z = z / 1000;
+      this_marker.translation.x = x * MILLIMETERS_TO_METERS;
+      this_marker.translation.y = y * MILLIMETERS_TO_METERS;
+      this_marker.translation.z = z * MILLIMETERS_TO_METERS;
       if (!std::isnan(this_marker.translation.x) && !std::isnan(this_marker.translation.y) && !std::isnan(this_marker.translation.z)){
         markers_msg.markers.push_back(this_marker);
       }
@@ -211,9 +213,9 @@ void QualisysDriver::process_packet(CRTPacket * const packet)
       if (publish_rigid_bodies) {
         mocap4r2_msgs::msg::RigidBody rb;
         rb.rigid_body_name = label;
-        rb.pose.position.x = x / 1000;
-        rb.pose.position.y = y / 1000;
-        rb.pose.position.z = z / 1000;
+        rb.pose.position.x = x * MILLIMETERS_TO_METERS;
+        rb.pose.position.y = y * MILLIMETERS_TO_METERS;
+        rb.pose.position.z = z * MILLIMETERS_TO_METERS;
         rb.pose.orientation.x = quaternion.x;
         rb.pose.orientation.y = quaternion.y;
         rb.pose.orientation.z = quaternion.z;
@@ -229,9 +231,9 @@ void QualisysDriver::process_packet(CRTPacket * const packet)
         transform_stamped.header.frame_id = frame_id_;  // "qualisys" - world frame
         transform_stamped.child_frame_id = label;       // rigid body name
 
-        transform_stamped.transform.translation.x = x / 1000;
-        transform_stamped.transform.translation.y = y / 1000;
-        transform_stamped.transform.translation.z = z / 1000;
+        transform_stamped.transform.translation.x = x * MILLIMETERS_TO_METERS;
+        transform_stamped.transform.translation.y = y * MILLIMETERS_TO_METERS;
+        transform_stamped.transform.translation.z = z * MILLIMETERS_TO_METERS;
 
         transform_stamped.transform.rotation.x = quaternion.x;
         transform_stamped.transform.rotation.y = quaternion.y;
