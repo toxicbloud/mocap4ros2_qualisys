@@ -177,10 +177,10 @@ void QualisysDriver::process_packet(CRTPacket * const packet)
   }
 
   if (mocap_rigid_bodies_pub_->get_subscription_count() > 0 || publish_tf_) {
-    mocap4r2_msgs::msg::RigidBodies msg_rb;
     std::vector<geometry_msgs::msg::TransformStamped> tf_transforms;
     
-    // Only prepare message if we have subscribers
+    // Prepare rigid bodies message if we have subscribers
+    mocap4r2_msgs::msg::RigidBodies msg_rb;
     if (mocap_rigid_bodies_pub_->get_subscription_count() > 0) {
       msg_rb.header.frame_id = frame_id_;
       msg_rb.header.stamp = timestamp;
@@ -198,7 +198,7 @@ void QualisysDriver::process_packet(CRTPacket * const packet)
       
       // Skip this rigid body if name is null
       if (label == nullptr) {
-        RCLCPP_WARN(get_logger(), "Rigid body %d has null name, skipping", i);
+        RCLCPP_WARN(get_logger(), "Rigid body %u has null name, skipping", i);
         continue;
       }
 
