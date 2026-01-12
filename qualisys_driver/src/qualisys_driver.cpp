@@ -128,7 +128,7 @@ void QualisysDriver::process_packet(CRTPacket * const packet)
   }
   last_frame_number_ = frame_number;
 
-  if (!mocap_markers_pub_->is_activated() && !mocap_rigid_bodies_pub_->is_activated() ) {
+  if (!mocap_markers_pub_->is_activated() && !mocap_rigid_bodies_pub_->is_activated() && !publish_tf_) {
     return;
   }
 
