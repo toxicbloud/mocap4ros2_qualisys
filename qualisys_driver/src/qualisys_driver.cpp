@@ -308,7 +308,7 @@ CallbackReturnT QualisysDriver::on_configure(const rclcpp_lifecycle::State &)
   tf_broadcaster_ = std::make_shared<tf2_ros::TransformBroadcaster>(this);
 
   client_change_state_ = this->create_client<lifecycle_msgs::srv::ChangeState>(
-    "change_state");
+    "/qualisys_driver/change_state");
 
   mocap_markers_pub_ = create_publisher<mocap4r2_msgs::msg::Markers>(
     "markers", 100);
@@ -317,7 +317,7 @@ CallbackReturnT QualisysDriver::on_configure(const rclcpp_lifecycle::State &)
     "rigid_bodies", rclcpp::QoS(1000));
 
   update_pub_ = create_publisher<std_msgs::msg::Empty>(
-    "update_notify", qos);
+    "/qualisys_driver/update_notify", qos);
 
   set_settings_qualisys();
 

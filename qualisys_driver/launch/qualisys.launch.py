@@ -20,6 +20,7 @@ import os
 from ament_index_python.packages import get_package_share_directory
 
 import launch
+import yaml
 
 from launch import LaunchDescription
 from launch.actions import EmitEvent
@@ -62,13 +63,36 @@ def generate_launch_description():
         params_file_path = os.path.join(
           get_package_share_directory('qualisys_driver'), 'config', config_val)
 
+      # Try to load YAML and extract ros__parameters so params apply even
+      # when node is launched inside a namespace.
+      node_params = [params_file_path]
+      try:
+        with open(params_file_path, 'r') as f:
+          data = yaml.safe_load(f)
+
+        params_dict = {}
+        if isinstance(data, dict):
+          if 'qualisys_driver_node' in data and 'ros__parameters' in data['qualisys_driver_node']:
+            params_dict = data['qualisys_driver_node']['ros__parameters']
+          elif 'ros__parameters' in data:
+            params_dict = data['ros__parameters']
+
+        if params_dict:
+          node_params = [params_dict]
+      except Exception:
+        node_params = [params_file_path]
+
       driver_node = LifecycleNode(
         name='qualisys_driver_node',
         namespace='',
         package='qualisys_driver',
         executable='qualisys_driver_main',
         output='screen',
-        parameters=[params_file_path],
+          parameters=node_params,
+          remappings=[
+            ('/tf', 'tf'),
+            ('/tf_static', 'tf_static'),
+          ],
       )
 
       driver_configure_trans_event = EmitEvent(
