@@ -17,3 +17,23 @@ You can configure the following parameters in `config/qualisys_driver_params.yam
 * `qos_history_policy` (keep_all): Quality of Service history policy.
 * `qos_reliability_policy` (best_effort): Quality of Service reliability policy.
 * `qos_depth` (10): Quality of Service depth.
+* `publish_pose_with_covariance` (false): Enable publishing of PoseWithCovarianceStamped for robot_localization.
+* `pose_covariance_diagonal` ([0.001, 0.001, 0.001, 0.001, 0.001, 0.001]): Diagonal covariance values for pose [x, y, z, rot_x, rot_y, rot_z].
+
+## Using with robot_localization
+
+To use the Qualisys system as ground truth with `robot_localization` EKF for map-to-odom transform:
+
+1. Enable PoseWithCovarianceStamped publishing:
+```yaml
+publish_pose_with_covariance: true
+```
+
+2. Adjust the covariance values based on your system's accuracy. The values represent variance (meters² for position, radians² for orientation):
+```yaml
+pose_covariance_diagonal: [0.001, 0.001, 0.001, 0.001, 0.001, 0.001]
+```
+
+3. Configure your robot_localization node to subscribe to the `/pose_with_covariance` topic.
+
+**Note**: The Qualisys SDK does not provide residual or covariance information. The covariance matrix uses configured constant diagonal values. Adjust these based on your system calibration and expected accuracy.

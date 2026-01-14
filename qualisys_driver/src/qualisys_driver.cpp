@@ -125,7 +125,14 @@ void QualisysDriver::process_packet(CRTPacket * const packet)
   }
   last_frame_number_ = frame_number;
 
-  if (!mocap_markers_pub_->is_activated() && !mocap_rigid_bodies_pub_->is_activated() ) {
+  bool has_active_publisher = mocap_markers_pub_->is_activated() || 
+                               mocap_rigid_bodies_pub_->is_activated();
+  
+  if (publish_pose_with_covariance_ && pose_with_covariance_pub_) {
+    has_active_publisher = has_active_publisher || pose_with_covariance_pub_->is_activated();
+  }
+  
+  if (!has_active_publisher) {
     return;
   }
 
@@ -181,6 +188,43 @@ void QualisysDriver::process_packet(CRTPacket * const packet)
     }
 
     mocap_rigid_bodies_pub_->publish(msg_rb);
+  }
+  
+  // Publish PoseWithCovarianceStamped if enabled
+  if (publish_pose_with_covariance_ && pose_with_covariance_pub_ && 
+      pose_with_covariance_pub_->is_activated() && 
+      pose_with_covariance_pub_->get_subscription_count() > 0 && 
+      rb_count > 0) {
+    
+    // Publish the first rigid body as PoseWithCovarianceStamped
+    float x, y, z;
+    float rot_matrix[9];
+    packet->Get6DOFBody(0, x, y, z, rot_matrix);
+    Quaternion quaternion = matrixToQuaternion(rot_matrix);
+    
+    geometry_msgs::msg::PoseWithCovarianceStamped pose_msg;
+    pose_msg.header.frame_id = frame_id_;
+    pose_msg.header.stamp = rclcpp::Clock().now();
+    
+    // Set pose
+    pose_msg.pose.pose.position.x = x / 1000;
+    pose_msg.pose.pose.position.y = y / 1000;
+    pose_msg.pose.pose.position.z = z / 1000;
+    pose_msg.pose.pose.orientation.x = quaternion.x;
+    pose_msg.pose.pose.orientation.y = quaternion.y;
+    pose_msg.pose.pose.orientation.z = quaternion.z;
+    pose_msg.pose.pose.orientation.w = quaternion.w;
+    
+    // Set covariance matrix (6x6 = 36 elements)
+    // The covariance matrix is row-major: [x, y, z, rotation about X, rotation about Y, rotation about Z]
+    std::fill(pose_msg.pose.covariance.begin(), pose_msg.pose.covariance.end(), 0.0);
+    
+    // Set diagonal elements from configuration
+    for (size_t i = 0; i < 6; ++i) {
+      pose_msg.pose.covariance[i * 6 + i] = pose_covariance_diagonal_[i];
+    }
+    
+    pose_with_covariance_pub_->publish(pose_msg);
   }
 }
 
@@ -239,6 +283,13 @@ CallbackReturnT QualisysDriver::on_configure(const rclcpp_lifecycle::State &)
 
   update_pub_ = create_publisher<std_msgs::msg::Empty>(
     "/qualisys_driver/update_notify", qos);
+  
+  // Create PoseWithCovarianceStamped publisher if enabled
+  if (publish_pose_with_covariance_) {
+    pose_with_covariance_pub_ = create_publisher<geometry_msgs::msg::PoseWithCovarianceStamped>(
+      "pose_with_covariance", rclcpp::QoS(10));
+    RCLCPP_INFO(get_logger(), "PoseWithCovarianceStamped publisher enabled");
+  }
 
   set_settings_qualisys();
 
@@ -254,6 +305,11 @@ CallbackReturnT QualisysDriver::on_activate(const rclcpp_lifecycle::State &)
   update_pub_->on_activate();
   mocap_markers_pub_->on_activate();
   mocap_rigid_bodies_pub_->on_activate();
+  
+  if (publish_pose_with_covariance_ && pose_with_covariance_pub_) {
+    pose_with_covariance_pub_->on_activate();
+  }
+  
   bool success = connect_qualisys();
 
   if (success) {
@@ -276,6 +332,11 @@ CallbackReturnT QualisysDriver::on_deactivate(const rclcpp_lifecycle::State &)
   update_pub_->on_deactivate();
   mocap_markers_pub_->on_deactivate();
   mocap_rigid_bodies_pub_->on_deactivate();
+  
+  if (publish_pose_with_covariance_ && pose_with_covariance_pub_) {
+    pose_with_covariance_pub_->on_deactivate();
+  }
+  
   stop_qualisys();
   RCLCPP_INFO(get_logger(), "Deactivated!\n");
 
@@ -289,6 +350,11 @@ CallbackReturnT QualisysDriver::on_cleanup(const rclcpp_lifecycle::State &)
   update_pub_.reset();
   mocap_markers_pub_.reset();
   mocap_rigid_bodies_pub_.reset();
+  
+  if (pose_with_covariance_pub_) {
+    pose_with_covariance_pub_.reset();
+  }
+  
   timer_->reset();
   RCLCPP_INFO(get_logger(), "Cleaned up!\n");
 
@@ -346,6 +412,11 @@ void QualisysDriver::initParameters()
   declare_parameter<bool>("use_markers_with_id", true);
   declare_parameter<int>("publish_rate", 10);
   declare_parameter<std::string>("frame_id", "map");
+  
+  // PoseWithCovarianceStamped parameters
+  declare_parameter<bool>("publish_pose_with_covariance", false);
+  declare_parameter<std::vector<double>>("pose_covariance_diagonal", 
+    std::vector<double>{0.001, 0.001, 0.001, 0.001, 0.001, 0.001});
 
   get_parameter<std::string>("host_name", host_name_);
   get_parameter<int>("port", port_);
@@ -358,6 +429,10 @@ void QualisysDriver::initParameters()
   get_parameter<bool>("use_markers_with_id", use_markers_with_id_);
   get_parameter<int>("publish_rate", publish_rate_);
   get_parameter<std::string>("frame_id", frame_id_);
+  
+  // Get PoseWithCovarianceStamped parameters
+  get_parameter<bool>("publish_pose_with_covariance", publish_pose_with_covariance_);
+  get_parameter<std::vector<double>>("pose_covariance_diagonal", pose_covariance_diagonal_);
 
   RCLCPP_INFO(get_logger(), "Param host_name: %s", host_name_.c_str());
   RCLCPP_INFO(get_logger(), "Param port: %d", port_);
@@ -370,4 +445,10 @@ void QualisysDriver::initParameters()
   RCLCPP_INFO(get_logger(), "Param use_markers_with_id: %s", use_markers_with_id_ ? "true" : "false");
   RCLCPP_INFO(get_logger(), "Param publish_rate: %d", publish_rate_);
   RCLCPP_INFO(get_logger(), "Param frame_id: %s", frame_id_.c_str());
+  RCLCPP_INFO(get_logger(), "Param publish_pose_with_covariance: %s", publish_pose_with_covariance_ ? "true" : "false");
+  
+  if (pose_covariance_diagonal_.size() != 6) {
+    RCLCPP_WARN(get_logger(), "pose_covariance_diagonal must have 6 elements, using default");
+    pose_covariance_diagonal_ = {0.001, 0.001, 0.001, 0.001, 0.001, 0.001};
+  }
 }

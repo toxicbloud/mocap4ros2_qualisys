@@ -11,3 +11,10 @@ qualisys_driver_node:
     qos_depth: 10                         # 10 / 100 / 1000
     publish_rate: 10
     frame_id: "qualisys"
+    
+    # PoseWithCovarianceStamped settings for robot_localization
+    publish_pose_with_covariance: false   # Enable to publish PoseWithCovarianceStamped
+    # Diagonal covariance values: [x, y, z, rot_x, rot_y, rot_z]
+    # Values represent variance in meters^2 for position and radians^2 for orientation
+    # Adjust based on your Qualisys system accuracy
+    pose_covariance_diagonal: [0.001, 0.001, 0.001, 0.001, 0.001, 0.001]
