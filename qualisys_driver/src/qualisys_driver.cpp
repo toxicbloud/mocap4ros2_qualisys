@@ -203,7 +203,6 @@ void QualisysDriver::process_packet(CRTPacket * const packet)
                                       rb_count > 0;
   
   if (should_publish_pose_with_cov) {
-    
     // Publish the first rigid body as PoseWithCovarianceStamped
     float x, y, z;
     float rot_matrix[9];
