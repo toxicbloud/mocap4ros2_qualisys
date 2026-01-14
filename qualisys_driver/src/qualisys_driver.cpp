@@ -31,6 +31,11 @@
 
 using namespace std::chrono_literals;
 
+// Default covariance diagonal values for PoseWithCovarianceStamped
+// [x, y, z, rotation about X, rotation about Y, rotation about Z]
+static const std::vector<double> DEFAULT_POSE_COVARIANCE_DIAGONAL = {
+  0.001, 0.001, 0.001, 0.001, 0.001, 0.001
+};
 
 struct Quaternion {
     float w, x, y, z;
@@ -191,10 +196,13 @@ void QualisysDriver::process_packet(CRTPacket * const packet)
   }
   
   // Publish PoseWithCovarianceStamped if enabled
-  if (publish_pose_with_covariance_ && pose_with_covariance_pub_ && 
-      pose_with_covariance_pub_->is_activated() && 
-      pose_with_covariance_pub_->get_subscription_count() > 0 && 
-      rb_count > 0) {
+  bool should_publish_pose_with_cov = publish_pose_with_covariance_ && 
+                                      pose_with_covariance_pub_ && 
+                                      pose_with_covariance_pub_->is_activated() && 
+                                      pose_with_covariance_pub_->get_subscription_count() > 0 && 
+                                      rb_count > 0;
+  
+  if (should_publish_pose_with_cov) {
     
     // Publish the first rigid body as PoseWithCovarianceStamped
     float x, y, z;
@@ -204,7 +212,7 @@ void QualisysDriver::process_packet(CRTPacket * const packet)
     
     geometry_msgs::msg::PoseWithCovarianceStamped pose_msg;
     pose_msg.header.frame_id = frame_id_;
-    pose_msg.header.stamp = rclcpp::Clock().now();
+    pose_msg.header.stamp = this->now();
     
     // Set pose
     pose_msg.pose.pose.position.x = x / 1000;
@@ -416,7 +424,7 @@ void QualisysDriver::initParameters()
   // PoseWithCovarianceStamped parameters
   declare_parameter<bool>("publish_pose_with_covariance", false);
   declare_parameter<std::vector<double>>("pose_covariance_diagonal", 
-    std::vector<double>{0.001, 0.001, 0.001, 0.001, 0.001, 0.001});
+    DEFAULT_POSE_COVARIANCE_DIAGONAL);
 
   get_parameter<std::string>("host_name", host_name_);
   get_parameter<int>("port", port_);
@@ -449,6 +457,6 @@ void QualisysDriver::initParameters()
   
   if (pose_covariance_diagonal_.size() != 6) {
     RCLCPP_WARN(get_logger(), "pose_covariance_diagonal must have 6 elements, using default");
-    pose_covariance_diagonal_ = {0.001, 0.001, 0.001, 0.001, 0.001, 0.001};
+    pose_covariance_diagonal_ = DEFAULT_POSE_COVARIANCE_DIAGONAL;
   }
 }
