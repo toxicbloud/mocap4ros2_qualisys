@@ -47,6 +47,8 @@
 #include "std_msgs/msg/empty.hpp"
 #include "std_msgs/msg/string.hpp"
 
+#include "geometry_msgs/msg/pose_with_covariance_stamped.hpp"
+
 #include "tf2/buffer_core.h"
 #include "tf2_ros/transform_broadcaster.h"
 
@@ -104,6 +106,12 @@ private:
   rclcpp_lifecycle::LifecyclePublisher<mocap4r2_msgs::msg::RigidBodies>::SharedPtr
     mocap_rigid_bodies_pub_;
   rclcpp_lifecycle::LifecyclePublisher<std_msgs::msg::Empty>::SharedPtr update_pub_;
+  
+  // PoseWithCovarianceStamped publisher and parameters
+  bool publish_pose_with_covariance_;
+  std::vector<double> pose_covariance_diagonal_;
+  rclcpp_lifecycle::LifecyclePublisher<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr
+    pose_with_covariance_pub_;
 };
 
 static
