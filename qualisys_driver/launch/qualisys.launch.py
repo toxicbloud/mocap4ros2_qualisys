@@ -16,7 +16,6 @@
 #         Antonin Rousseau    <antonin.rousseau@inria.fr>
 
 import os
-import sys
 
 from ament_index_python.packages import get_package_share_directory
 
@@ -35,6 +34,12 @@ from launch_ros.events.lifecycle import ChangeState
 from launch.substitutions import LaunchConfiguration
 
 import lifecycle_msgs.msg
+
+
+# Timer periods for lifecycle state transitions
+CONFIGURE_DELAY = 2.0
+ACTIVATE_DELAY = 3.0
+FINAL_TITLE_DELAY = 4.0
 
 
 def set_terminal_title(title):
@@ -99,7 +104,7 @@ def generate_launch_description():
         )]
 
       configure_action = TimerAction(
-        period=2.0,
+        period=CONFIGURE_DELAY,
         actions=[OpaqueFunction(function=emit_configure_event)]
       )
 
@@ -114,7 +119,7 @@ def generate_launch_description():
         )]
 
       activate_action = TimerAction(
-        period=3.0,
+        period=ACTIVATE_DELAY,
         actions=[OpaqueFunction(function=emit_activate_event)]
       )
 
@@ -124,12 +129,17 @@ def generate_launch_description():
         return []
 
       final_title_action = TimerAction(
-        period=4.0,
+        period=FINAL_TITLE_DELAY,
         actions=[OpaqueFunction(function=set_final_title_func)]
       )
-      
-      return [driver_node, node_start_handler, configure_action, 
-              activate_action, final_title_action]
+
+      return [
+        driver_node,
+        node_start_handler,
+        configure_action,
+        activate_action,
+        final_title_action
+      ]
 
     # Create the launch description and populate
     ld = LaunchDescription()
