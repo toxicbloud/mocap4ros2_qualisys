@@ -43,7 +43,14 @@ FINAL_TITLE_DELAY = 4.0
 
 
 def set_terminal_title(title):
-    """Set the terminal window/tab title using ANSI escape sequences."""
+    """Set the terminal window/tab title using ANSI escape sequences.
+    
+    This function uses the ANSI escape sequence format: \033]0;{title}\007
+    which is compatible with most modern terminals (xterm, gnome-terminal, etc.).
+    
+    Args:
+        title: The string to set as the terminal window/tab title.
+    """
     print(f"\033]0;{title}\007", end='', flush=True)
 
 
