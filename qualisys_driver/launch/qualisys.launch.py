@@ -26,11 +26,32 @@ from launch.actions import EmitEvent
 from launch.actions import SetEnvironmentVariable
 from launch.actions import DeclareLaunchArgument
 from launch.actions import OpaqueFunction
+from launch.actions import RegisterEventHandler
+from launch.actions import TimerAction
+from launch.event_handlers import OnProcessStart
 from launch_ros.actions import LifecycleNode
 from launch_ros.events.lifecycle import ChangeState
 from launch.substitutions import LaunchConfiguration
 
 import lifecycle_msgs.msg
+
+
+# Timer periods for lifecycle state transitions
+CONFIGURE_DELAY = 2.0
+ACTIVATE_DELAY = 3.0
+FINAL_TITLE_DELAY = 4.0
+
+
+def set_terminal_title(title):
+    """Set the terminal window/tab title using ANSI escape sequences.
+    
+    This function uses the ANSI escape sequence format: \033]0;{title}\007
+    which is compatible with most modern terminals (xterm, gnome-terminal, etc.).
+    
+    Args:
+        title: The string to set as the terminal window/tab title.
+    """
+    print(f"\033]0;{title}\007", end='', flush=True)
 
 
 def generate_launch_description():
@@ -47,6 +68,9 @@ def generate_launch_description():
       'RCUTILS_CONSOLE_STDOUT_LINE_BUFFERED', '1')
 
     def launch_setup(context, *args, **kwargs):
+      # Set initial terminal title
+      set_terminal_title("Qualisys Driver - Initializing")
+
       # Resolve the 'config' launch argument at runtime
       config_val = LaunchConfiguration('config').perform(context)
 
@@ -65,21 +89,64 @@ def generate_launch_description():
         parameters=[params_file_path],
       )
 
-      driver_configure_trans_event = EmitEvent(
-        event=ChangeState(
-          lifecycle_node_matcher=launch.events.matchers.matches_action(driver_node),
-          transition_id=lifecycle_msgs.msg.Transition.TRANSITION_CONFIGURE,
+      # Update terminal title when node starts
+      def on_node_start(event, context):
+        set_terminal_title("Qualisys Driver - Node Started")
+
+      node_start_handler = RegisterEventHandler(
+        OnProcessStart(
+          target_action=driver_node,
+          on_start=on_node_start
         )
       )
 
-      driver_activate_trans_event = EmitEvent(
-         event=ChangeState(
-          lifecycle_node_matcher=launch.events.matchers.matches_action(driver_node),
-          transition_id=lifecycle_msgs.msg.Transition.TRANSITION_ACTIVATE,
-        )
+      # Configure transition with title update
+      def emit_configure_event(context):
+        set_terminal_title("Qualisys Driver - Configuring")
+        return [EmitEvent(
+          event=ChangeState(
+            lifecycle_node_matcher=launch.events.matchers.matches_action(driver_node),
+            transition_id=lifecycle_msgs.msg.Transition.TRANSITION_CONFIGURE,
+          )
+        )]
+
+      configure_action = TimerAction(
+        period=CONFIGURE_DELAY,
+        actions=[OpaqueFunction(function=emit_configure_event)]
       )
 
-      return [driver_node, driver_configure_trans_event, driver_activate_trans_event]
+      # Activate transition with title update
+      def emit_activate_event(context):
+        set_terminal_title("Qualisys Driver - Activating")
+        return [EmitEvent(
+          event=ChangeState(
+            lifecycle_node_matcher=launch.events.matchers.matches_action(driver_node),
+            transition_id=lifecycle_msgs.msg.Transition.TRANSITION_ACTIVATE,
+          )
+        )]
+
+      activate_action = TimerAction(
+        period=ACTIVATE_DELAY,
+        actions=[OpaqueFunction(function=emit_activate_event)]
+      )
+
+      # Set final terminal title
+      def set_final_title_func(context):
+        set_terminal_title("qualisys driver started")
+        return []
+
+      final_title_action = TimerAction(
+        period=FINAL_TITLE_DELAY,
+        actions=[OpaqueFunction(function=set_final_title_func)]
+      )
+
+      return [
+        driver_node,
+        node_start_handler,
+        configure_action,
+        activate_action,
+        final_title_action
+      ]
 
     # Create the launch description and populate
     ld = LaunchDescription()
