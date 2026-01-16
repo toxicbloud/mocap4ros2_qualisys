@@ -80,6 +80,10 @@ void QualisysDriver::set_settings_qualisys()
 {
 }
 
+/**
+ * We want to handle all the different packet types that can be received from QTM
+ * before that driver keeps crashing, im investigating...
+ */
 void QualisysDriver::loop()
 {
   CRTPacket * prt_packet = port_protocol_.GetRTPacket();
@@ -94,11 +98,32 @@ void QualisysDriver::loop()
           RCLCPP_ERROR(get_logger(), s.c_str());
           break;
         }
-      case CRTPacket::PacketNoMoreData:
-        RCLCPP_WARN(get_logger(), "No data received");
+      case CRTPacket::PacketCommand:
+        RCLCPP_WARN(get_logger(), "Received command packet");
+        break;
+      case CRTPacket::PacketXML:
+        RCLCPP_WARN(get_logger(), "Received XML packet");
         break;
       case CRTPacket::PacketData:
         process_packet(prt_packet);
+        break;
+      case CRTPacket::PacketNoMoreData:
+        RCLCPP_WARN(get_logger(), "No data received");
+        break;
+      case CRTPacket::PacketC3DFile:
+        RCLCPP_WARN(get_logger(), "Received C3D file packet");
+        break;
+      case CRTPacket::PacketEvent:
+        RCLCPP_WARN(get_logger(), "Received event packet");
+        break;
+      case CRTPacket::PacketDiscover:
+        RCLCPP_WARN(get_logger(), "Received discover packet");
+        break;
+      case CRTPacket::PacketQTMFile:
+        RCLCPP_WARN(get_logger(), "Received QTM file packet");
+        break;
+      case CRTPacket::PacketNone:
+        RCLCPP_WARN(get_logger(), "Received none packet");
         break;
       default:
         RCLCPP_ERROR(get_logger(), "Unknown CRTPacket");
