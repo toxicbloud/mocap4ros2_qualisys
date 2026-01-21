@@ -87,15 +87,33 @@ void QualisysDriver::set_settings_qualisys()
 void QualisysDriver::loop()
 {
   CRTPacket * prt_packet = port_protocol_.GetRTPacket();
+  
+  // Check if packet is null before proceeding
+  if (prt_packet == nullptr) {
+    RCLCPP_ERROR(get_logger(), "GetRTPacket returned null pointer");
+    return;
+  }
+  
   CRTPacket::EPacketType e_type;
-  port_protocol_.GetCurrentFrame(CRTProtocol::cComponent3d + CRTProtocol::cComponent6d);
+  
+  // Request current frame from QTM
+  if (!port_protocol_.GetCurrentFrame(CRTProtocol::cComponent3d + CRTProtocol::cComponent6d)) {
+    RCLCPP_ERROR(get_logger(), "Failed to get current frame from QTM - connection may be lost");
+    return;
+  }
+  
   if (port_protocol_.ReceiveRTPacket(e_type, true)) {
     switch (e_type) {
       case CRTPacket::PacketError:
         {
           std::string s = "Error when streaming frames: ";
-          s += port_protocol_.GetRTPacket()->GetErrorString();
+          CRTPacket * error_packet = port_protocol_.GetRTPacket();
+          if (error_packet != nullptr) {
+            s += error_packet->GetErrorString();
+          }
           RCLCPP_ERROR(get_logger(), s.c_str());
+          // Connection error detected - stop processing to avoid crash
+          RCLCPP_ERROR(get_logger(), "Connection error detected, stopping frame requests");
           break;
         }
       case CRTPacket::PacketCommand:
@@ -123,11 +141,17 @@ void QualisysDriver::loop()
         RCLCPP_WARN(get_logger(), "Received QTM file packet");
         break;
       case CRTPacket::PacketNone:
-        RCLCPP_WARN(get_logger(), "Received none packet");
+        RCLCPP_ERROR(get_logger(), "Received none packet - this indicates connection issues with QTM");
+        RCLCPP_ERROR(get_logger(), "Stopping frame requests to prevent crash. Please check QTM connection.");
+        // PacketNone indicates the connection has issues
+        // Stop processing to avoid SIGPIPE crash on next GetCurrentFrame call
         break;
       default:
         RCLCPP_ERROR(get_logger(), "Unknown CRTPacket");
     }
+  } else {
+    // ReceiveRTPacket returned false - connection issue
+    RCLCPP_ERROR(get_logger(), "Failed to receive RT packet from QTM - connection may be broken");
   }
 }
 
