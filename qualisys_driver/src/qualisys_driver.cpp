@@ -119,8 +119,6 @@ void QualisysDriver::loop()
             s += error_packet->GetErrorString();
           }
           RCLCPP_ERROR(get_logger(), s.c_str());
-          // Connection error detected - stop processing to avoid crash
-          RCLCPP_ERROR(get_logger(), "Connection error detected, stopping frame requests");
           connection_error_detected_ = true;
           break;
         }
@@ -149,10 +147,7 @@ void QualisysDriver::loop()
         RCLCPP_WARN(get_logger(), "Received QTM file packet");
         break;
       case CRTPacket::PacketNone:
-        RCLCPP_ERROR(get_logger(), "Received none packet - this indicates connection issues with QTM");
-        RCLCPP_ERROR(get_logger(), "Stopping frame requests to prevent crash. Please check QTM connection.");
-        // PacketNone indicates the connection has issues
-        // Stop processing to avoid SIGPIPE crash on next GetCurrentFrame call
+        RCLCPP_ERROR(get_logger(), "Received none packet indicating QTM connection issues - stopping frame requests to prevent crash. Please check connection.");
         connection_error_detected_ = true;
         break;
       default:
