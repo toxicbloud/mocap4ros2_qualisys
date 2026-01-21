@@ -86,11 +86,17 @@ void QualisysDriver::set_settings_qualisys()
  */
 void QualisysDriver::loop()
 {
+  // If a connection error was previously detected, don't attempt to communicate
+  if (connection_error_detected_) {
+    return;
+  }
+  
   CRTPacket * prt_packet = port_protocol_.GetRTPacket();
   
   // Check if packet is null before proceeding
   if (prt_packet == nullptr) {
     RCLCPP_ERROR(get_logger(), "GetRTPacket returned null pointer");
+    connection_error_detected_ = true;
     return;
   }
   
@@ -99,6 +105,7 @@ void QualisysDriver::loop()
   // Request current frame from QTM
   if (!port_protocol_.GetCurrentFrame(CRTProtocol::cComponent3d + CRTProtocol::cComponent6d)) {
     RCLCPP_ERROR(get_logger(), "Failed to get current frame from QTM - connection may be lost");
+    connection_error_detected_ = true;
     return;
   }
   
@@ -114,6 +121,7 @@ void QualisysDriver::loop()
           RCLCPP_ERROR(get_logger(), s.c_str());
           // Connection error detected - stop processing to avoid crash
           RCLCPP_ERROR(get_logger(), "Connection error detected, stopping frame requests");
+          connection_error_detected_ = true;
           break;
         }
       case CRTPacket::PacketCommand:
@@ -145,6 +153,7 @@ void QualisysDriver::loop()
         RCLCPP_ERROR(get_logger(), "Stopping frame requests to prevent crash. Please check QTM connection.");
         // PacketNone indicates the connection has issues
         // Stop processing to avoid SIGPIPE crash on next GetCurrentFrame call
+        connection_error_detected_ = true;
         break;
       default:
         RCLCPP_ERROR(get_logger(), "Unknown CRTPacket");
@@ -152,6 +161,7 @@ void QualisysDriver::loop()
   } else {
     // ReceiveRTPacket returned false - connection issue
     RCLCPP_ERROR(get_logger(), "Failed to receive RT packet from QTM - connection may be broken");
+    connection_error_detected_ = true;
   }
 }
 
@@ -382,6 +392,10 @@ CallbackReturnT QualisysDriver::on_activate(const rclcpp_lifecycle::State &)
   update_pub_->on_activate();
   mocap_markers_pub_->on_activate();
   mocap_rigid_bodies_pub_->on_activate();
+  
+  // Reset connection error flag when (re)activating
+  connection_error_detected_ = false;
+  
   bool success = connect_qualisys();
 
   if (success) {
@@ -646,6 +660,9 @@ void QualisysDriver::initParameters()
   // Initialize calibration state
   timestamp_offset_ns_ = 0;
   timestamp_offset_calibrated_ = false;
+  
+  // Initialize connection state
+  connection_error_detected_ = false;
 
   RCLCPP_INFO(get_logger(), "Param host_name: %s", host_name_.c_str());
   RCLCPP_INFO(get_logger(), "Param port: %d", port_);
