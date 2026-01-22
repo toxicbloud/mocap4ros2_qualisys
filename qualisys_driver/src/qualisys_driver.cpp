@@ -332,17 +332,21 @@ CallbackReturnT QualisysDriver::on_configure(const rclcpp_lifecycle::State &)
 
   tf_broadcaster_ = std::make_shared<tf2_ros::TransformBroadcaster>(this);
 
+  /**
+   * is it bad to use qualisys_driver instead of a generic name?
+   * Probably yes, but mocap4r2 should have thaught of that from the beginning...
+   */
   client_change_state_ = this->create_client<lifecycle_msgs::srv::ChangeState>(
-    "/qualisys_driver/change_state");
+    "qualisys_driver/change_state");
 
   mocap_markers_pub_ = create_publisher<mocap4r2_msgs::msg::Markers>(
-    "markers", 100);
+    "qualisys_driver/markers", 100);
 
   mocap_rigid_bodies_pub_ = create_publisher<mocap4r2_msgs::msg::RigidBodies>(
-    "rigid_bodies", rclcpp::QoS(1000));
+    "qualisys_driver/rigid_bodies", rclcpp::QoS(1000));
 
   update_pub_ = create_publisher<std_msgs::msg::Empty>(
-    "/qualisys_driver/update_notify", qos);
+    "qualisys_driver/update_notify", qos);
 
   set_settings_qualisys();
 
