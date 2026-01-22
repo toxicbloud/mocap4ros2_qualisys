@@ -203,7 +203,8 @@ void QualisysDriver::process_packet(CRTPacket * const packet)
     mocap_markers_pub_->publish(markers_msg);
   }
 
-  if (mocap_rigid_bodies_pub_->get_subscription_count() > 0 || publish_tf_) {
+  const bool publish_pose = true;  // Always publish per-rigid-body PoseStamped
+  if (mocap_rigid_bodies_pub_->get_subscription_count() > 0 || publish_tf_ || publish_pose) {
     // Reserve capacity for TF transforms to avoid reallocations
     std::vector<geometry_msgs::msg::TransformStamped> tf_transforms;
     if (publish_tf_ && rb_count > 0) {
@@ -225,6 +226,11 @@ void QualisysDriver::process_packet(CRTPacket * const packet)
       // Get6DOFBody(unsigned int nBodyIndex, float &fX, float &fY, float &fZ, float afRotMatrix[9]);
       packet->Get6DOFBody(i, x, y, z, rot_matrix);
       Quaternion quaternion = matrixToQuaternion(rot_matrix);
+
+      // Validate measurements to avoid propagating NaNs
+      bool position_valid = !std::isnan(x) && !std::isnan(y) && !std::isnan(z);
+      bool orientation_valid = !std::isnan(quaternion.x) && !std::isnan(quaternion.y) &&
+               !std::isnan(quaternion.z) && !std::isnan(quaternion.w);
 
       const char* label = port_protocol_.Get6DOFBodyName(i);
       
@@ -250,29 +256,57 @@ void QualisysDriver::process_packet(CRTPacket * const packet)
       }
 
       // Collect TF transform if enabled and data is valid (no NaN values)
-      if (publish_tf_) {
-        // Check if position and orientation are valid (no NaN values)
-        bool position_valid = !std::isnan(x) && !std::isnan(y) && !std::isnan(z);
-        bool orientation_valid = !std::isnan(quaternion.x) && !std::isnan(quaternion.y) && 
-                                 !std::isnan(quaternion.z) && !std::isnan(quaternion.w);
-        
-        if (position_valid && orientation_valid) {
-          geometry_msgs::msg::TransformStamped transform_stamped;
-          transform_stamped.header.stamp = timestamp;
-          transform_stamped.header.frame_id = frame_id_;  // "qualisys" - world frame
-          transform_stamped.child_frame_id = label;       // rigid body name
+      if (publish_tf_ && position_valid && orientation_valid) {
+        geometry_msgs::msg::TransformStamped transform_stamped;
+        transform_stamped.header.stamp = timestamp;
+        transform_stamped.header.frame_id = frame_id_;  // "qualisys" - world frame
+        transform_stamped.child_frame_id = label;       // rigid body name
 
-          transform_stamped.transform.translation.x = x * MILLIMETERS_TO_METERS;
-          transform_stamped.transform.translation.y = y * MILLIMETERS_TO_METERS;
-          transform_stamped.transform.translation.z = z * MILLIMETERS_TO_METERS;
+        transform_stamped.transform.translation.x = x * MILLIMETERS_TO_METERS;
+        transform_stamped.transform.translation.y = y * MILLIMETERS_TO_METERS;
+        transform_stamped.transform.translation.z = z * MILLIMETERS_TO_METERS;
 
-          transform_stamped.transform.rotation.x = quaternion.x;
-          transform_stamped.transform.rotation.y = quaternion.y;
-          transform_stamped.transform.rotation.z = quaternion.z;
-          transform_stamped.transform.rotation.w = quaternion.w;
+        transform_stamped.transform.rotation.x = quaternion.x;
+        transform_stamped.transform.rotation.y = quaternion.y;
+        transform_stamped.transform.rotation.z = quaternion.z;
+        transform_stamped.transform.rotation.w = quaternion.w;
 
-          tf_transforms.push_back(transform_stamped);
+        tf_transforms.push_back(transform_stamped);
+      }
+
+      // Publish per-rigid-body PoseStamped for easier consumption
+      if (position_valid && orientation_valid) {
+        std::string rb_label(label);
+        // Sanitize to produce a valid topic segment (replace spaces and slashes)
+        for (char & c : rb_label) {
+          if (c == ' ' || c == '/') {
+            c = '_';
+          }
         }
+
+        auto pub_it = rigid_body_pose_pubs_.find(rb_label);
+        if (pub_it == rigid_body_pose_pubs_.end()) {
+          std::string topic_name = "qualisys_driver/" + rb_label + "/pose";
+          auto pose_pub = create_publisher<geometry_msgs::msg::PoseStamped>(topic_name, rclcpp::QoS(10));
+          if (get_current_state().id() == lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE) {
+            pose_pub->on_activate();
+          }
+          pub_it = rigid_body_pose_pubs_.emplace(rb_label, pose_pub).first;
+          RCLCPP_INFO(get_logger(), "Created PoseStamped publisher for rigid body '%s' on topic '%s'", rb_label.c_str(), topic_name.c_str());
+        }
+
+        geometry_msgs::msg::PoseStamped pose_msg;
+        pose_msg.header.frame_id = frame_id_;
+        pose_msg.header.stamp = timestamp;
+        pose_msg.pose.position.x = x * MILLIMETERS_TO_METERS;
+        pose_msg.pose.position.y = y * MILLIMETERS_TO_METERS;
+        pose_msg.pose.position.z = z * MILLIMETERS_TO_METERS;
+        pose_msg.pose.orientation.x = quaternion.x;
+        pose_msg.pose.orientation.y = quaternion.y;
+        pose_msg.pose.orientation.z = quaternion.z;
+        pose_msg.pose.orientation.w = quaternion.w;
+
+        pub_it->second->publish(pose_msg);
       }
     }
 
@@ -362,6 +396,9 @@ CallbackReturnT QualisysDriver::on_activate(const rclcpp_lifecycle::State &)
   update_pub_->on_activate();
   mocap_markers_pub_->on_activate();
   mocap_rigid_bodies_pub_->on_activate();
+  for (auto & entry : rigid_body_pose_pubs_) {
+    entry.second->on_activate();
+  }
   bool success = connect_qualisys();
 
   if (success) {
@@ -389,6 +426,9 @@ CallbackReturnT QualisysDriver::on_deactivate(const rclcpp_lifecycle::State &)
   update_pub_->on_deactivate();
   mocap_markers_pub_->on_deactivate();
   mocap_rigid_bodies_pub_->on_deactivate();
+  for (auto & entry : rigid_body_pose_pubs_) {
+    entry.second->on_deactivate();
+  }
   stop_qualisys();
   RCLCPP_INFO(get_logger(), "Deactivated!\n");
 
@@ -402,6 +442,7 @@ CallbackReturnT QualisysDriver::on_cleanup(const rclcpp_lifecycle::State &)
   update_pub_.reset();
   mocap_markers_pub_.reset();
   mocap_rigid_bodies_pub_.reset();
+  rigid_body_pose_pubs_.clear();
   timer_->reset();
   RCLCPP_INFO(get_logger(), "Cleaned up!\n");
 
