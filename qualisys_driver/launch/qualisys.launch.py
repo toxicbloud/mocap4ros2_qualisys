@@ -20,13 +20,14 @@ import os
 from ament_index_python.packages import get_package_share_directory
 
 import launch
+import yaml
 
 from launch import LaunchDescription
 from launch.actions import EmitEvent
 from launch.actions import SetEnvironmentVariable
 from launch.actions import DeclareLaunchArgument
 from launch.actions import OpaqueFunction
-from launch_ros.actions import LifecycleNode
+from launch_ros.actions import LifecycleNode, PushRosNamespace
 from launch_ros.events.lifecycle import ChangeState
 from launch.substitutions import LaunchConfiguration
 
@@ -43,6 +44,12 @@ def generate_launch_description():
         default_value=default_params_path,
         description='Path to the parameters YAML file for the qualisys driver')
 
+    # Standard ROS 2 namespace launch argument
+    declare_namespace_arg = DeclareLaunchArgument(
+      'namespace',
+      default_value='',
+      description='Namespace to launch the qualisys driver into')
+
     stdout_linebuf_envvar = SetEnvironmentVariable(
       'RCUTILS_CONSOLE_STDOUT_LINE_BUFFERED', '1')
 
@@ -56,13 +63,36 @@ def generate_launch_description():
         params_file_path = os.path.join(
           get_package_share_directory('qualisys_driver'), 'config', config_val)
 
+      # Try to load YAML and extract ros__parameters so params apply even
+      # when node is launched inside a namespace.
+      node_params = [params_file_path]
+      try:
+        with open(params_file_path, 'r') as f:
+          data = yaml.safe_load(f)
+
+        params_dict = {}
+        if isinstance(data, dict):
+          if 'qualisys_driver_node' in data and 'ros__parameters' in data['qualisys_driver_node']:
+            params_dict = data['qualisys_driver_node']['ros__parameters']
+          elif 'ros__parameters' in data:
+            params_dict = data['ros__parameters']
+
+        if params_dict:
+          node_params = [params_dict]
+      except Exception:
+        node_params = [params_file_path]
+
       driver_node = LifecycleNode(
         name='qualisys_driver_node',
         namespace='',
         package='qualisys_driver',
         executable='qualisys_driver_main',
         output='screen',
-        parameters=[params_file_path],
+          parameters=node_params,
+          remappings=[
+            ('/tf', 'tf'),
+            ('/tf_static', 'tf_static'),
+          ],
       )
 
       driver_configure_trans_event = EmitEvent(
@@ -79,13 +109,16 @@ def generate_launch_description():
         )
       )
 
-      return [driver_node, driver_configure_trans_event, driver_activate_trans_event]
+      # If a namespace was provided, push it so that any relative topic names
+      # in the node become namespaced as expected.
+      return [PushRosNamespace(LaunchConfiguration('namespace')), driver_node, driver_configure_trans_event, driver_activate_trans_event]
 
     # Create the launch description and populate
     ld = LaunchDescription()
 
     ld.add_action(stdout_linebuf_envvar)
     ld.add_action(declare_config_arg)
+    ld.add_action(declare_namespace_arg)
     ld.add_action(OpaqueFunction(function=launch_setup))
 
     return ld

@@ -80,6 +80,10 @@ void QualisysDriver::set_settings_qualisys()
 {
 }
 
+/**
+ * We want to handle all the different packet types that can be received from QTM
+ * before that driver keeps crashing, im investigating...
+ */
 void QualisysDriver::loop()
 {
   CRTPacket * prt_packet = port_protocol_.GetRTPacket();
@@ -94,11 +98,32 @@ void QualisysDriver::loop()
           RCLCPP_ERROR(get_logger(), s.c_str());
           break;
         }
-      case CRTPacket::PacketNoMoreData:
-        RCLCPP_WARN(get_logger(), "No data received");
+      case CRTPacket::PacketCommand:
+        RCLCPP_WARN(get_logger(), "Received command packet");
+        break;
+      case CRTPacket::PacketXML:
+        RCLCPP_WARN(get_logger(), "Received XML packet");
         break;
       case CRTPacket::PacketData:
         process_packet(prt_packet);
+        break;
+      case CRTPacket::PacketNoMoreData:
+        RCLCPP_WARN(get_logger(), "No data received");
+        break;
+      case CRTPacket::PacketC3DFile:
+        RCLCPP_WARN(get_logger(), "Received C3D file packet");
+        break;
+      case CRTPacket::PacketEvent:
+        RCLCPP_WARN(get_logger(), "Received event packet");
+        break;
+      case CRTPacket::PacketDiscover:
+        RCLCPP_WARN(get_logger(), "Received discover packet");
+        break;
+      case CRTPacket::PacketQTMFile:
+        RCLCPP_WARN(get_logger(), "Received QTM file packet");
+        break;
+      case CRTPacket::PacketNone:
+        RCLCPP_WARN(get_logger(), "Received none packet");
         break;
       default:
         RCLCPP_ERROR(get_logger(), "Unknown CRTPacket");
@@ -178,12 +203,15 @@ void QualisysDriver::process_packet(CRTPacket * const packet)
     mocap_markers_pub_->publish(markers_msg);
   }
 
-  if (mocap_rigid_bodies_pub_->get_subscription_count() > 0 || publish_tf_) {
+  const bool publish_pose = true;  // Always publish per-rigid-body PoseStamped
+  if (mocap_rigid_bodies_pub_->get_subscription_count() > 0 || publish_tf_ || publish_pose) {
     // Reserve capacity for TF transforms to avoid reallocations
     std::vector<geometry_msgs::msg::TransformStamped> tf_transforms;
     if (publish_tf_ && rb_count > 0) {
       tf_transforms.reserve(rb_count);
     }
+
+    bool settings_refreshed = false;
     
     // Check if we should publish rigid body messages
     bool publish_rigid_bodies = mocap_rigid_bodies_pub_->get_subscription_count() > 0;
@@ -201,11 +229,31 @@ void QualisysDriver::process_packet(CRTPacket * const packet)
       packet->Get6DOFBody(i, x, y, z, rot_matrix);
       Quaternion quaternion = matrixToQuaternion(rot_matrix);
 
+      // Validate measurements to avoid propagating NaNs
+      bool position_valid = !std::isnan(x) && !std::isnan(y) && !std::isnan(z);
+      bool orientation_valid = !std::isnan(quaternion.x) && !std::isnan(quaternion.y) &&
+               !std::isnan(quaternion.z) && !std::isnan(quaternion.w);
+
       const char* label = port_protocol_.Get6DOFBodyName(i);
-      
-      // Skip this rigid body if name is null
+
+      if (label == nullptr && !settings_refreshed) {
+        bool settings_read = false;
+        port_protocol_.Read6DOFSettings(settings_read);
+        if (!settings_read) {
+          RCLCPP_WARN(get_logger(), "Failed to refresh 6DOF settings after null rigid body name");
+        }
+        settings_refreshed = true;
+        label = port_protocol_.Get6DOFBodyName(i);
+      }
+
+      // Skip this rigid body if name is still null
       if (label == nullptr) {
-        RCLCPP_WARN(get_logger(), "Rigid body %u has null name, skipping", i);
+        RCLCPP_WARN_THROTTLE(
+          get_logger(),
+          *get_clock(),
+          5000,
+          "Rigid body %u has null name, skipping",
+          i);
         continue;
       }
 
@@ -225,29 +273,57 @@ void QualisysDriver::process_packet(CRTPacket * const packet)
       }
 
       // Collect TF transform if enabled and data is valid (no NaN values)
-      if (publish_tf_) {
-        // Check if position and orientation are valid (no NaN values)
-        bool position_valid = !std::isnan(x) && !std::isnan(y) && !std::isnan(z);
-        bool orientation_valid = !std::isnan(quaternion.x) && !std::isnan(quaternion.y) && 
-                                 !std::isnan(quaternion.z) && !std::isnan(quaternion.w);
-        
-        if (position_valid && orientation_valid) {
-          geometry_msgs::msg::TransformStamped transform_stamped;
-          transform_stamped.header.stamp = timestamp;
-          transform_stamped.header.frame_id = frame_id_;  // "qualisys" - world frame
-          transform_stamped.child_frame_id = label;       // rigid body name
+      if (publish_tf_ && position_valid && orientation_valid) {
+        geometry_msgs::msg::TransformStamped transform_stamped;
+        transform_stamped.header.stamp = timestamp;
+        transform_stamped.header.frame_id = frame_id_;  // "qualisys" - world frame
+        transform_stamped.child_frame_id = label;       // rigid body name
 
-          transform_stamped.transform.translation.x = x * MILLIMETERS_TO_METERS;
-          transform_stamped.transform.translation.y = y * MILLIMETERS_TO_METERS;
-          transform_stamped.transform.translation.z = z * MILLIMETERS_TO_METERS;
+        transform_stamped.transform.translation.x = x * MILLIMETERS_TO_METERS;
+        transform_stamped.transform.translation.y = y * MILLIMETERS_TO_METERS;
+        transform_stamped.transform.translation.z = z * MILLIMETERS_TO_METERS;
 
-          transform_stamped.transform.rotation.x = quaternion.x;
-          transform_stamped.transform.rotation.y = quaternion.y;
-          transform_stamped.transform.rotation.z = quaternion.z;
-          transform_stamped.transform.rotation.w = quaternion.w;
+        transform_stamped.transform.rotation.x = quaternion.x;
+        transform_stamped.transform.rotation.y = quaternion.y;
+        transform_stamped.transform.rotation.z = quaternion.z;
+        transform_stamped.transform.rotation.w = quaternion.w;
 
-          tf_transforms.push_back(transform_stamped);
+        tf_transforms.push_back(transform_stamped);
+      }
+
+      // Publish per-rigid-body PoseStamped for easier consumption
+      if (position_valid && orientation_valid) {
+        std::string rb_label(label);
+        // Sanitize to produce a valid topic segment (replace spaces and slashes)
+        for (char & c : rb_label) {
+          if (c == ' ' || c == '/') {
+            c = '_';
+          }
         }
+
+        auto pub_it = rigid_body_pose_pubs_.find(rb_label);
+        if (pub_it == rigid_body_pose_pubs_.end()) {
+          std::string topic_name = "qualisys_driver/" + rb_label + "/pose";
+          auto pose_pub = create_publisher<geometry_msgs::msg::PoseStamped>(topic_name, rclcpp::QoS(10));
+          if (get_current_state().id() == lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE) {
+            pose_pub->on_activate();
+          }
+          pub_it = rigid_body_pose_pubs_.emplace(rb_label, pose_pub).first;
+          RCLCPP_INFO(get_logger(), "Created PoseStamped publisher for rigid body '%s' on topic '%s'", rb_label.c_str(), topic_name.c_str());
+        }
+
+        geometry_msgs::msg::PoseStamped pose_msg;
+        pose_msg.header.frame_id = frame_id_;
+        pose_msg.header.stamp = timestamp;
+        pose_msg.pose.position.x = x * MILLIMETERS_TO_METERS;
+        pose_msg.pose.position.y = y * MILLIMETERS_TO_METERS;
+        pose_msg.pose.position.z = z * MILLIMETERS_TO_METERS;
+        pose_msg.pose.orientation.x = quaternion.x;
+        pose_msg.pose.orientation.y = quaternion.y;
+        pose_msg.pose.orientation.z = quaternion.z;
+        pose_msg.pose.orientation.w = quaternion.w;
+
+        pub_it->second->publish(pose_msg);
       }
     }
 
@@ -307,17 +383,21 @@ CallbackReturnT QualisysDriver::on_configure(const rclcpp_lifecycle::State &)
 
   tf_broadcaster_ = std::make_shared<tf2_ros::TransformBroadcaster>(this);
 
+  /**
+   * is it bad to use qualisys_driver instead of a generic name?
+   * Probably yes, but mocap4r2 should have thaught of that from the beginning...
+   */
   client_change_state_ = this->create_client<lifecycle_msgs::srv::ChangeState>(
-    "/qualisys_driver/change_state");
+    "qualisys_driver/change_state");
 
   mocap_markers_pub_ = create_publisher<mocap4r2_msgs::msg::Markers>(
-    "/markers", 100);
+    "qualisys_driver/markers", 100);
 
   mocap_rigid_bodies_pub_ = create_publisher<mocap4r2_msgs::msg::RigidBodies>(
-    "rigid_bodies", rclcpp::QoS(1000));
+    "qualisys_driver/rigid_bodies", rclcpp::QoS(1000));
 
   update_pub_ = create_publisher<std_msgs::msg::Empty>(
-    "/qualisys_driver/update_notify", qos);
+    "qualisys_driver/update_notify", qos);
 
   set_settings_qualisys();
 
@@ -333,6 +413,9 @@ CallbackReturnT QualisysDriver::on_activate(const rclcpp_lifecycle::State &)
   update_pub_->on_activate();
   mocap_markers_pub_->on_activate();
   mocap_rigid_bodies_pub_->on_activate();
+  for (auto & entry : rigid_body_pose_pubs_) {
+    entry.second->on_activate();
+  }
   bool success = connect_qualisys();
 
   if (success) {
@@ -360,6 +443,9 @@ CallbackReturnT QualisysDriver::on_deactivate(const rclcpp_lifecycle::State &)
   update_pub_->on_deactivate();
   mocap_markers_pub_->on_deactivate();
   mocap_rigid_bodies_pub_->on_deactivate();
+  for (auto & entry : rigid_body_pose_pubs_) {
+    entry.second->on_deactivate();
+  }
   stop_qualisys();
   RCLCPP_INFO(get_logger(), "Deactivated!\n");
 
@@ -373,6 +459,7 @@ CallbackReturnT QualisysDriver::on_cleanup(const rclcpp_lifecycle::State &)
   update_pub_.reset();
   mocap_markers_pub_.reset();
   mocap_rigid_bodies_pub_.reset();
+  rigid_body_pose_pubs_.clear();
   timer_->reset();
   RCLCPP_INFO(get_logger(), "Cleaned up!\n");
 
