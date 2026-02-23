@@ -210,6 +210,8 @@ void QualisysDriver::process_packet(CRTPacket * const packet)
     if (publish_tf_ && rb_count > 0) {
       tf_transforms.reserve(rb_count);
     }
+
+    bool settings_refreshed = false;
     
     // Check if we should publish rigid body messages
     bool publish_rigid_bodies = mocap_rigid_bodies_pub_->get_subscription_count() > 0;
@@ -233,10 +235,25 @@ void QualisysDriver::process_packet(CRTPacket * const packet)
                !std::isnan(quaternion.z) && !std::isnan(quaternion.w);
 
       const char* label = port_protocol_.Get6DOFBodyName(i);
-      
-      // Skip this rigid body if name is null
+
+      if (label == nullptr && !settings_refreshed) {
+        bool settings_read = false;
+        port_protocol_.Read6DOFSettings(settings_read);
+        if (!settings_read) {
+          RCLCPP_WARN(get_logger(), "Failed to refresh 6DOF settings after null rigid body name");
+        }
+        settings_refreshed = true;
+        label = port_protocol_.Get6DOFBodyName(i);
+      }
+
+      // Skip this rigid body if name is still null
       if (label == nullptr) {
-        RCLCPP_WARN(get_logger(), "Rigid body %u has null name, skipping", i);
+        RCLCPP_WARN_THROTTLE(
+          get_logger(),
+          *get_clock(),
+          5000,
+          "Rigid body %u has null name, skipping",
+          i);
         continue;
       }
 
