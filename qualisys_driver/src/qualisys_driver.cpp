@@ -349,7 +349,8 @@ bool QualisysDriver::stop_qualisys()
 }
 
 QualisysDriver::QualisysDriver(const rclcpp::NodeOptions node_options)
-: rclcpp_lifecycle::LifecycleNode("qualisys_driver_node", node_options)
+: rclcpp_lifecycle::LifecycleNode("qualisys_driver_node", node_options),
+  qos_(10)
 {
   initParameters();
 }
