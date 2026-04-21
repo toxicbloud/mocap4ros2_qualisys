@@ -108,6 +108,7 @@ private:
   int64_t timestamp_offset_ns_;
   bool timestamp_offset_calibrated_;
   bool publish_tf_;
+  rclcpp::QoS qos_;
   std::shared_ptr<rclcpp::Client<lifecycle_msgs::srv::ChangeState>> client_change_state_;
   rclcpp_lifecycle::LifecyclePublisher<mocap4r2_msgs::msg::Markers>::SharedPtr mocap_markers_pub_;
   rclcpp_lifecycle::LifecyclePublisher<mocap4r2_msgs::msg::RigidBodies>::SharedPtr

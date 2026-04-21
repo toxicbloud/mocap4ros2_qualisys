@@ -304,7 +304,7 @@ void QualisysDriver::process_packet(CRTPacket * const packet)
         auto pub_it = rigid_body_pose_pubs_.find(rb_label);
         if (pub_it == rigid_body_pose_pubs_.end()) {
           std::string topic_name = "qualisys_driver/" + rb_label + "/pose";
-          auto pose_pub = create_publisher<geometry_msgs::msg::PoseStamped>(topic_name, rclcpp::QoS(10));
+          auto pose_pub = create_publisher<geometry_msgs::msg::PoseStamped>(topic_name, qos_);
           if (get_current_state().id() == lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE) {
             pose_pub->on_activate();
           }
@@ -381,6 +381,8 @@ CallbackReturnT QualisysDriver::on_configure(const rclcpp_lifecycle::State &)
   // makes no guarantees about the order or reliability of delivery.
   qos.reliability(rmw_qos_reliability_policy->second);
 
+  qos_ = qos;
+
   tf_broadcaster_ = std::make_shared<tf2_ros::TransformBroadcaster>(this);
 
   /**
@@ -394,7 +396,7 @@ CallbackReturnT QualisysDriver::on_configure(const rclcpp_lifecycle::State &)
     "qualisys_driver/markers", 100);
 
   mocap_rigid_bodies_pub_ = create_publisher<mocap4r2_msgs::msg::RigidBodies>(
-    "qualisys_driver/rigid_bodies", rclcpp::QoS(1000));
+    "qualisys_driver/rigid_bodies", qos_);
 
   update_pub_ = create_publisher<std_msgs::msg::Empty>(
     "qualisys_driver/update_notify", qos);
