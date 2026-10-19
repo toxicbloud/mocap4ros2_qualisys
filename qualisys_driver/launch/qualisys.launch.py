@@ -27,8 +27,10 @@ from launch.actions import EmitEvent
 from launch.actions import SetEnvironmentVariable
 from launch.actions import DeclareLaunchArgument
 from launch.actions import OpaqueFunction
+from launch.actions import RegisterEventHandler
 from launch_ros.actions import LifecycleNode, PushRosNamespace
 from launch_ros.events.lifecycle import ChangeState
+from launch_ros.event_handlers import OnStateTransition
 from launch.substitutions import LaunchConfiguration
 
 import lifecycle_msgs.msg
@@ -102,10 +104,19 @@ def generate_launch_description():
         )
       )
 
-      driver_activate_trans_event = EmitEvent(
-         event=ChangeState(
-          lifecycle_node_matcher=launch.events.matchers.matches_action(driver_node),
-          transition_id=lifecycle_msgs.msg.Transition.TRANSITION_ACTIVATE,
+      driver_activate_trans_event = RegisterEventHandler(
+        OnStateTransition(
+          target_lifecycle_node=driver_node,
+          start_state='configuring',
+          goal_state='inactive',
+          entities=[
+            EmitEvent(
+              event=ChangeState(
+                lifecycle_node_matcher=launch.events.matchers.matches_action(driver_node),
+                transition_id=lifecycle_msgs.msg.Transition.TRANSITION_ACTIVATE,
+              )
+            ),
+          ],
         )
       )
 
