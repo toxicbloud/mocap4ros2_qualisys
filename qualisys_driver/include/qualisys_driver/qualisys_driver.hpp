@@ -58,12 +58,7 @@ class QualisysDriver : public rclcpp_lifecycle::LifecycleNode
 {
 public:
   explicit QualisysDriver(
-    const rclcpp::NodeOptions options =
-    rclcpp::NodeOptions().parameter_overrides(
-      std::vector<rclcpp::Parameter> {
-    rclcpp::Parameter("use_sim_time", true)
-  }
-    )
+    const rclcpp::NodeOptions options = rclcpp::NodeOptions()
   );
 
   using CallbackReturnT =

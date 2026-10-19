@@ -44,6 +44,22 @@ struct Quaternion {
 Quaternion matrixToQuaternion(float* matrix) {
     Quaternion quaternion;
 
+    // A valid 3D rotation matrix is orthogonal (det = +1, Frobenius norm^2 = 3).
+    // It can NEVER be all zeros. If QTM loses tracking and outputs zeros or NaNs,
+    // mark the quaternion as NaN so downstream validation rejects it.
+    bool all_zero = true;
+    for (int i = 0; i < 9; ++i) {
+        if (std::isnan(matrix[i])) {
+            return {NAN, NAN, NAN, NAN};
+        }
+        if (matrix[i] != 0.0f) {
+            all_zero = false;
+        }
+    }
+    if (all_zero) {
+        return {NAN, NAN, NAN, NAN};
+    }
+
     float trace = matrix[0] + matrix[4] + matrix[8];
     if (trace > 0) {
         float s = 0.5f / std::sqrt(trace + 1.0f);
@@ -86,16 +102,16 @@ void QualisysDriver::set_settings_qualisys()
  */
 void QualisysDriver::loop()
 {
-  CRTPacket * prt_packet = port_protocol_.GetRTPacket();
   CRTPacket::EPacketType e_type;
   port_protocol_.GetCurrentFrame(CRTProtocol::cComponent3d + CRTProtocol::cComponent6d);
   if (port_protocol_.ReceiveRTPacket(e_type, true)) {
+    CRTPacket * prt_packet = port_protocol_.GetRTPacket();
     switch (e_type) {
       case CRTPacket::PacketError:
         {
           std::string s = "Error when streaming frames: ";
           s += port_protocol_.GetRTPacket()->GetErrorString();
-          RCLCPP_ERROR(get_logger(), s.c_str());
+          RCLCPP_ERROR(get_logger(), "%s", s.c_str());
           break;
         }
       case CRTPacket::PacketCommand:
@@ -162,7 +178,7 @@ void QualisysDriver::process_packet(CRTPacket * const packet)
   // Get timestamp - use Qualisys timestamp if use_system_timestamp is false
   rclcpp::Time timestamp;
   if (use_system_timestamp_) {
-    timestamp = rclcpp::Clock().now();
+    timestamp = this->now();
   } else {
     // GetTimeStamp() returns timestamp in microseconds
     const uint64_t MICROSECONDS_PER_SECOND = 1000000;
@@ -294,11 +310,14 @@ void QualisysDriver::process_packet(CRTPacket * const packet)
       // Publish per-rigid-body PoseStamped for easier consumption
       if (position_valid && orientation_valid) {
         std::string rb_label(label);
-        // Sanitize to produce a valid topic segment (replace spaces and slashes)
+        // Sanitize to produce a valid ROS 2 topic segment (only alphanumeric and '_')
         for (char & c : rb_label) {
-          if (c == ' ' || c == '/') {
+          if (!std::isalnum(static_cast<unsigned char>(c)) && c != '_') {
             c = '_';
           }
+        }
+        if (!rb_label.empty() && std::isdigit(static_cast<unsigned char>(rb_label.front()))) {
+          rb_label = "_" + rb_label;
         }
 
         auto pub_it = rigid_body_pose_pubs_.find(rb_label);
@@ -442,7 +461,9 @@ CallbackReturnT QualisysDriver::on_deactivate(const rclcpp_lifecycle::State &)
 {
   RCLCPP_INFO(get_logger(), "State id [%d]", get_current_state().id());
   RCLCPP_INFO(get_logger(), "State label [%s]", get_current_state().label().c_str());
-  timer_->reset();
+  if (timer_) {
+    timer_->reset();
+  }
   update_pub_->on_deactivate();
   mocap_markers_pub_->on_deactivate();
   mocap_rigid_bodies_pub_->on_deactivate();
@@ -463,7 +484,9 @@ CallbackReturnT QualisysDriver::on_cleanup(const rclcpp_lifecycle::State &)
   mocap_markers_pub_.reset();
   mocap_rigid_bodies_pub_.reset();
   rigid_body_pose_pubs_.clear();
-  timer_->reset();
+  if (timer_) {
+    timer_->reset();
+  }
   RCLCPP_INFO(get_logger(), "Cleaned up!\n");
 
   return CallbackReturnT::SUCCESS;
@@ -493,18 +516,39 @@ bool QualisysDriver::connect_qualisys()
     get_logger(),
     "Trying to connect to Qualisys host at %s:%d", host_name_.c_str(), port_);
 
+  if (port_protocol_.Connected()) {
+    port_protocol_.Disconnect();
+  }
+
   if (!port_protocol_.Connect(
       reinterpret_cast<const char *>(host_name_.data()), port_, 0, 1, 7))
   {
-    RCLCPP_FATAL(get_logger(), "Connection error");
+    RCLCPP_FATAL(
+      get_logger(), "Connection error: %s", port_protocol_.GetErrorString());
     return false;
   }
-  RCLCPP_INFO(get_logger(), "Connected");
+  RCLCPP_INFO(get_logger(), "Connected to QTM at %s:%d", host_name_.c_str(), port_);
 
-  bool settings_read;
-  port_protocol_.Read6DOFSettings(settings_read);
+  bool settings_read = false;
+  if (!port_protocol_.Read6DOFSettings(settings_read)) {
+    RCLCPP_ERROR(
+      get_logger(), "Failed to read 6DOF settings: %s", port_protocol_.GetErrorString());
+    port_protocol_.Disconnect();
+    return false;
+  }
 
-  return settings_read;
+  if (!settings_read) {
+    RCLCPP_WARN(
+      get_logger(),
+      "Connected to QTM, but no 6DOF data/settings available yet (will retry when 6DOF bodies appear)");
+  } else {
+    RCLCPP_INFO(
+      get_logger(),
+      "6DOF settings read successfully (%u rigid bodies configured in QTM)",
+      port_protocol_.Get6DOFBodyCount());
+  }
+
+  return true;
 }
 
 void QualisysDriver::calibrate_timestamp_offset()
